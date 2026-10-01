@@ -1,0 +1,33 @@
+{
+  "name": "project-arena",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "test": "node --experimental-strip-types --test tests/architecture.test.mjs",
+    "test:pressure": "node --experimental-strip-types --test tests/pressure.test.mjs",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run test && npm run test:pressure && npm run typecheck",
+    "build": "npm run check && vite build --emptyOutDir false",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "dependencies": {
+    "matter-js": "0.20.0",
+    "pixi.js": "8.21.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@types/matter-js": "0.20.2",
+    "@types/node": "22.18.6",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "typescript": "5.9.3",
+    "vite": "8.3.1"
+  }
+}
