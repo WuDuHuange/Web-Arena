@@ -1,44 +1,39 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { CONTENT_LIBRARY } from "../content/library.ts";
+import { validateContent } from "../content/validate.ts";
+import { defaultMatchup, squadMatchup } from "../content/deployment.ts";
 import { exportDeployment } from "../persistence/snapshot.ts";
 import { createBattlefield } from "../render/battlefield.ts";
 import type { Battlefield } from "../render/battlefield.ts";
 import { Simulation } from "../simulation/index.ts";
 import type { BattleSetup } from "../simulation/index.ts";
-import { greyboxSetup } from "../simulation/spawn.ts";
-import { compressionSetup, cornerSetup, pressureSetup, tunnellingSetup } from "../simulation/pressure.ts";
 
-type Phase = "editing" | "running" | "paused";
+type Phase = "editing" | "running" | "paused" | "decided";
 
 interface Readout {
   tick: number;
   entities: number;
   droppedMs: number;
+  redAlive: number;
+  blueAlive: number;
 }
 
 /** 60 Hz authoritative step. Render rate is free to differ. */
 const FIXED_STEP_MS = 1000 / 60;
 
 /**
- * Resolves the deployment for this session.
+ * Which deployment this session fights.
  *
- * The greybox scene is the default. A `?scene=` query parameter swaps in one of the Phase 1
- * pressure scenes so the same build can be measured in a real browser without a rebuild.
+ * `?scene=battle` is the default: one of each archetype per side. `squad` fields three
+ * copies of each, which is the crowded case worth benchmarking.
  */
 function resolveSetup(): { setup: BattleSetup; scene: string } {
-  const requested = new URLSearchParams(window.location.search).get("scene") ?? "greybox";
-  const heavy = { fixedStepMs: FIXED_STEP_MS, units: 100, props: 20 };
-
+  const requested = new URLSearchParams(window.location.search).get("scene") ?? "battle";
   switch (requested) {
-    case "pressure":
-      return { setup: pressureSetup(heavy), scene: "pressure" };
-    case "compression":
-      return { setup: compressionSetup(heavy), scene: "compression" };
-    case "corner":
-      return { setup: cornerSetup(heavy), scene: "corner" };
-    case "tunnelling":
-      return { setup: tunnellingSetup(heavy), scene: "tunnelling" };
+    case "squad":
+      return { setup: squadMatchup(FIXED_STEP_MS, 3), scene: "squad" };
     default:
-      return { setup: greyboxSetup(FIXED_STEP_MS), scene: "greybox" };
+      return { setup: defaultMatchup(FIXED_STEP_MS), scene: "battle" };
   }
 }
 
@@ -53,9 +48,17 @@ export function App() {
   const simulationRef = useRef<Simulation | null>(null);
   const battlefieldRef = useRef<Battlefield | null>(null);
   const phaseRef = useRef<Phase>("editing");
+  const setupRef = useRef<BattleSetup>(defaultMatchup(FIXED_STEP_MS));
+
   const [phase, setPhase] = useState<Phase>("editing");
   const [scene] = useState<string>(() => resolveSetup().scene);
-  const [readout, setReadout] = useState<Readout>({ tick: 0, entities: 0, droppedMs: 0 });
+  const [readout, setReadout] = useState<Readout>({
+    tick: 0,
+    entities: 0,
+    droppedMs: 0,
+    redAlive: 0,
+    blueAlive: 0
+  });
 
   const applyPhase = useCallback((next: Phase) => {
     phaseRef.current = next;
@@ -67,6 +70,16 @@ export function App() {
     if (!host) {
       return;
     }
+
+    // Content is validated once, before anything is simulated. A broken library must fail
+    // here, loudly, rather than producing a battle where a unit silently never attacks.
+    const validation = validateContent(CONTENT_LIBRARY);
+    if (!validation.ok) {
+      console.error("content library is invalid", validation.issues);
+    }
+
+    const { setup } = resolveSetup();
+    setupRef.current = setup;
 
     let disposed = false;
     let frame = 0;
@@ -126,7 +139,6 @@ export function App() {
     };
     (window as unknown as { __arenaBench?: typeof bench }).__arenaBench = bench;
 
-    const setup = resolveSetup().setup;
     simulationRef.current = new Simulation(setup);
 
     const loop = (now: number): void => {
@@ -143,6 +155,10 @@ export function App() {
       if (simulation) {
         if (phaseRef.current === "running") {
           simulation.advance(delta);
+          if (simulation.decided) {
+            // Freeze on the result rather than letting the last survivor keep walking.
+            applyPhase("decided");
+          }
         }
         battlefieldRef.current?.render(simulation.snapshot(), simulation.alpha);
       }
@@ -164,10 +180,13 @@ export function App() {
       if (!simulation) {
         return;
       }
+      const entities = simulation.snapshot().entities;
       setReadout({
         tick: simulation.tick,
-        entities: simulation.snapshot().entities.length,
-        droppedMs: Math.round(simulation.droppedMs)
+        entities: entities.length,
+        droppedMs: Math.round(simulation.droppedMs),
+        redAlive: entities.filter((e) => e.combat && e.faction === "red").length,
+        blueAlive: entities.filter((e) => e.combat && e.faction === "blue").length
       });
     }, 250);
 
@@ -183,15 +202,22 @@ export function App() {
   }, [applyPhase]);
 
   const handleReset = useCallback(() => {
-    const setup = resolveSetup().setup;
+    const { setup } = resolveSetup();
+    setupRef.current = setup;
     const simulation = new Simulation(setup);
     simulationRef.current = simulation;
-    setReadout({ tick: 0, entities: simulation.snapshot().entities.length, droppedMs: 0 });
+    setReadout({
+      tick: 0,
+      entities: simulation.snapshot().entities.length,
+      droppedMs: 0,
+      redAlive: simulation.snapshot().entities.filter((e) => e.combat && e.faction === "red").length,
+      blueAlive: simulation.snapshot().entities.filter((e) => e.combat && e.faction === "blue").length
+    });
     applyPhase("editing");
   }, [applyPhase]);
 
   const handleExport = useCallback(() => {
-    const blob = new Blob([exportDeployment(resolveSetup().setup)], { type: "application/json" });
+    const blob = new Blob([exportDeployment(setupRef.current)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -204,7 +230,7 @@ export function App() {
     <div className="app">
       <header className="app__header">
         <h1>Project Arena</h1>
-        <span className="app__badge">架构骨架 · 灰盒</span>
+        <span className="app__badge">对战闭环</span>
         <span className="app__badge">场景：{scene}</span>
       </header>
 
@@ -216,8 +242,12 @@ export function App() {
             <h2>会话</h2>
             <p className="panel__phase">{phaseLabel(phase)}</p>
             <div className="panel__buttons">
-              <button type="button" onClick={() => applyPhase("running")} disabled={phase === "running"}>
-                运行
+              <button
+                type="button"
+                onClick={() => applyPhase("running")}
+                disabled={phase === "running" || phase === "decided"}
+              >
+                开战
               </button>
               <button type="button" onClick={() => applyPhase("paused")} disabled={phase !== "running"}>
                 暂停
@@ -226,6 +256,16 @@ export function App() {
                 重置
               </button>
             </div>
+          </section>
+
+          <section className="panel__block">
+            <h2>战况</h2>
+            <dl className="panel__readout">
+              <dt>红方存活</dt>
+              <dd className="panel__readout--red">{readout.redAlive}</dd>
+              <dt>蓝方存活</dt>
+              <dd className="panel__readout--blue">{readout.blueAlive}</dd>
+            </dl>
           </section>
 
           <section className="panel__block">
@@ -241,6 +281,19 @@ export function App() {
           </section>
 
           <section className="panel__block">
+            <h2>兵装</h2>
+            <ul className="panel__roster">
+              {CONTENT_LIBRARY.characters.map((character) => (
+                <li key={character.id}>
+                  <span className={`roster__dot roster__dot--${character.id.split(".")[0]}`} />
+                  {character.name}
+                  <span className="roster__cost">{character.cost}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          <section className="panel__block">
             <h2>布阵</h2>
             <button type="button" onClick={handleExport}>
               导出布阵 JSON
@@ -248,7 +301,7 @@ export function App() {
           </section>
 
           <p className="panel__note">
-            编辑、寻敌、技能与伤害尚未实现。本骨架只验证固定步长时钟、物理适配与渲染分层。
+            近战、扇形、穿透直线与圆形范围已接入。机关陷阱、Buff 与编辑器尚未实现。
           </p>
         </aside>
       </main>
@@ -259,10 +312,12 @@ export function App() {
 function phaseLabel(phase: Phase): string {
   switch (phase) {
     case "editing":
-      return "编辑中";
+      return "待命";
     case "running":
-      return "运行中";
+      return "交战中";
     case "paused":
       return "已暂停";
+    case "decided":
+      return "已分胜负";
   }
 }

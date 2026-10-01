@@ -47,7 +47,7 @@ export function pressureSetup(options: PressureOptions): BattleSetup {
   pushColumn(spawns, "blue", units - half, rng, 1);
   pushProps(spawns, props, rng);
 
-  return { seed, fixedStepMs, bounds: PRESSURE_BOUNDS, spawns };
+  return { seed, fixedStepMs, bounds: PRESSURE_BOUNDS, spawns, abilities: [] };
 }
 
 /** Both factions bunched into a small pocket, to force sustained contact overlap. */
@@ -72,7 +72,7 @@ export function compressionSetup(options: PressureOptions): BattleSetup {
   }
   pushProps(spawns, options.props, rng);
 
-  return { seed, fixedStepMs, bounds: PRESSURE_BOUNDS, spawns };
+  return { seed, fixedStepMs, bounds: PRESSURE_BOUNDS, spawns, abilities: [] };
 }
 
 /** Everything shoved into one corner, to see whether bodies wedge or escape the walls. */
@@ -100,7 +100,7 @@ export function cornerSetup(options: PressureOptions): BattleSetup {
   }
   pushProps(spawns, options.props, rng);
 
-  return { seed, fixedStepMs, bounds: PRESSURE_BOUNDS, spawns };
+  return { seed, fixedStepMs, bounds: PRESSURE_BOUNDS, spawns, abilities: [] };
 }
 
 /**
@@ -129,7 +129,7 @@ export function tunnellingSetup(options: PressureOptions): BattleSetup {
   spawns.push(prop("neutral", PRESSURE_BOUNDS.width / 2, midY + 90, 14, 3, 80));
 
   void rng;
-  return { seed, fixedStepMs, bounds: PRESSURE_BOUNDS, spawns };
+  return { seed, fixedStepMs, bounds: PRESSURE_BOUNDS, spawns, abilities: [] };
 }
 
 function pushColumn(

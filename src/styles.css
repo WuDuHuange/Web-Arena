@@ -142,6 +142,58 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+/* Survivor counts are the headline number, so they stay legible at a glance. */
+.panel__readout--red,
+.panel__readout--blue {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.panel__readout--red {
+  color: #c0453b;
+}
+
+.panel__readout--blue {
+  color: #2f74c0;
+}
+
+.panel__roster {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+
+.panel__roster li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.roster__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.roster__dot--red {
+  background: #e0554b;
+}
+
+.roster__dot--blue {
+  background: #4b8fe0;
+}
+
+.roster__cost {
+  margin-left: auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .panel__note {
   margin: 0;
   font-size: 12px;

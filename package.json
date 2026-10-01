@@ -8,12 +8,14 @@
   },
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "test": "node --experimental-strip-types --test tests/architecture.test.mjs",
+    "test": "node --experimental-strip-types --test tests/architecture.test.mjs tests/geometry.test.mjs tests/combat.test.mjs",
     "test:pressure": "node --experimental-strip-types --test tests/pressure.test.mjs",
+    "test:battle": "node --experimental-strip-types --test tests/battle.test.mjs",
     "typecheck": "tsc --noEmit",
-    "check": "npm run test && npm run test:pressure && npm run typecheck",
+    "check": "npm run test && npm run test:pressure && npm run test:battle && npm run typecheck",
     "build": "npm run check && vite build --emptyOutDir false",
-    "preview": "vite preview --host 127.0.0.1"
+    "benchmark": "node scripts/benchmark.mjs",
+    "preview": "vite preview --host 127.0.0.1 --strictPort"
   },
   "dependencies": {
     "matter-js": "0.20.0",

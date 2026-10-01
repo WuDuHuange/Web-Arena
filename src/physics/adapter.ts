@@ -97,6 +97,49 @@ export class PhysicsAdapter {
     Matter.Engine.update(this.engine, fixedStepMs);
   }
 
+  /**
+   * Pushes each entity's current velocity into its physics body.
+   *
+   * This must be called every tick, before `step`. Matter integrates from the body's own
+   * velocity, so writing `entity.motion.velocity` without calling this changes nothing
+   * about where the entity actually goes — the body keeps whatever velocity it was
+   * created with and the entity appears frozen while reporting a perfectly sensible
+   * intent.
+   */
+  applyVelocities(world: World): void {
+    for (const entity of world.all()) {
+      if (entity.collider.fixed) {
+        continue;
+      }
+      const body = this.bodies.get(entity.id);
+      if (!body) {
+        continue;
+      }
+      Matter.Body.setVelocity(body, {
+        x: toMatterVelocity(entity.motion.velocity.x),
+        y: toMatterVelocity(entity.motion.velocity.y)
+      });
+    }
+  }
+
+  /**
+   * Drops the physics bodies for entities that no longer exist.
+   *
+   * Without this a dead unit keeps its body in the world: invisible to the renderer (it is
+   * gone from the snapshot) but still solid to everything else, so the arena accumulates
+   * phantom obstacles as a battle drags on.
+   */
+  forget(ids: readonly number[]): void {
+    for (const id of ids) {
+      const body = this.bodies.get(id);
+      if (!body) {
+        continue;
+      }
+      Matter.Composite.remove(this.engine.world, body);
+      this.bodies.delete(id);
+    }
+  }
+
   /** Copies Matter's resolved motion back into the authoritative world. */
   writeBack(world: World): void {
     for (const entity of world.all()) {

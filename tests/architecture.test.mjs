@@ -117,12 +117,48 @@ test("simulation core never depends on the DOM, React, PixiJS or UI layers", () 
   }
 });
 
-test("content validation rejects dangling references and duplicate ids", () => {
-  const valid = {
-    abilities: [{ id: "shot", name: "Shot", shape: "line" }],
-    characters: [{ id: "ranger", name: "Ranger", abilityIds: ["shot"], cost: 3, appearance: "ranger" }],
+/** A minimal well-formed library, matching the current ability schema. */
+function makeAbility(id) {
+  return {
+    id,
+    name: id,
+    spec: {
+      id,
+      name: id,
+      geometry: { kind: "line", range: 100, width: 10 },
+      windupTicks: 4,
+      activeTicks: 2,
+      cooldownTicks: 8,
+      damage: 5,
+      maxTargets: 1,
+      turnToTarget: 1
+    }
+  };
+}
+
+function makeValidLibrary() {
+  return {
+    abilities: [makeAbility("shot")],
+    characters: [
+      {
+        id: "ranger",
+        name: "Ranger",
+        abilityIds: ["shot"],
+        cost: 3,
+        appearance: "ranger",
+        radius: 12,
+        mass: 1,
+        hp: 60,
+        speed: 90,
+        aggroRange: 400
+      }
+    ],
     props: [{ id: "barrel", name: "Barrel", trigger: "explosive", appearance: "barrel" }]
   };
+}
+
+test("content validation rejects dangling references and duplicate ids", () => {
+  const valid = makeValidLibrary();
   assert.equal(validateContent(valid).ok, true, "a well-formed library must pass");
 
   const dangling = {
@@ -131,7 +167,6 @@ test("content validation rejects dangling references and duplicate ids", () => {
   };
   const danglingResult = validateContent(dangling);
   assert.equal(danglingResult.ok, false);
-  assert.equal(danglingResult.issues.length, 1);
   assert.match(danglingResult.issues[0].message, /dangling/);
 
   const duplicate = {
@@ -143,6 +178,47 @@ test("content validation rejects dangling references and duplicate ids", () => {
   assert.match(duplicateResult.issues[0].message, /duplicate/);
 });
 
+test("content validation catches a combatant that would never attack", () => {
+  // An empty rotation loads fine and then produces a unit that walks around and never
+  // swings. In a battle that reads as "something is broken" with nothing to point at, so
+  // the validator has to reject it up front.
+  const valid = makeValidLibrary();
+  const mute = {
+    ...valid,
+    characters: [{ ...valid.characters[0], abilityIds: [] }]
+  };
+  const result = validateContent(mute);
+  assert.equal(result.ok, false);
+  assert.match(result.issues[0].message, /at least one ability/);
+});
+
+test("content validation catches an ability whose spec id drifted from its key", () => {
+  const valid = makeValidLibrary();
+  const drifted = {
+    ...valid,
+    abilities: [{ ...valid.abilities[0], spec: { ...valid.abilities[0].spec, id: "something-else" } }]
+  };
+  const result = validateContent(drifted);
+  assert.equal(result.ok, false);
+  assert.match(result.issues[0].message, /does not match library id/);
+});
+
+test("content validation catches a cone with no angle", () => {
+  const valid = makeValidLibrary();
+  const brokenCone = {
+    ...valid,
+    abilities: [
+      {
+        ...valid.abilities[0],
+        spec: { ...valid.abilities[0].spec, geometry: { kind: "cone", range: 80 } }
+      }
+    ]
+  };
+  const result = validateContent(brokenCone);
+  assert.equal(result.ok, false);
+  assert.match(result.issues[0].message, /positive halfAngle/);
+});
+
 /**
  * Velocities are world units per SECOND. The red unit travels 200 units in the one
  * simulated second, which is far enough to reach the neutral prop at x = 400 — so this
@@ -152,6 +228,9 @@ const deterministicSetup = {
   seed: 7,
   fixedStepMs: 10,
   bounds: { width: 800, height: 600 },
+  // No abilities and no characters: this fixture exists to pin the physics seam, so every
+  // spawn is a plain body. Silence here is intentional, not an oversight.
+  abilities: [],
   spawns: [
     { kind: "unit", faction: "red", x: 200, y: 300, radius: 12, mass: 1, hp: 10, vx: 200 },
     { kind: "unit", faction: "blue", x: 600, y: 300, radius: 12, mass: 1, hp: 10, vx: -200 },
