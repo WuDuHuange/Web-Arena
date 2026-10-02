@@ -12,4 +12,6 @@ coverage/
 # Local browser-profile scratch used by scripts/benchmark.mjs and the CDP verify scripts.
 # Both are throwaway: deleting them only costs a slower first launch next time.
 .bench-chrome/
+.bench-chrome-gpu/
 .cdp-profile/
+.cdp-fresh/

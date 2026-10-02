@@ -66,6 +66,25 @@ export function propSpawn(placement: PropPlacement, definition: PropDef): SpawnD
 }
 
 /**
+ * Turns placements into spawns.
+ *
+ * An unknown placement id is skipped rather than thrown on: it is a content bug the
+ * validator is expected to have caught, and one missing prop should not make the whole
+ * arena fail to build.
+ */
+function propSpawns(placements: readonly PropPlacement[]): SpawnDef[] {
+  const out: SpawnDef[] = [];
+  for (const placement of placements) {
+    const definition = PROP_LIBRARY.find((p) => p.id === placement.id);
+    if (!definition) {
+      continue;
+    }
+    out.push(propSpawn(placement, definition));
+  }
+  return out;
+}
+
+/**
  * Places a lineup on the field.
  *
  * Each side is arranged in a column near its own edge and spaced so that no two units
@@ -77,16 +96,7 @@ export function buildLineup(options: LineupOptions): BattleSetup {
 
   pushSide(spawns, "red", options.red, 0);
   pushSide(spawns, "blue", options.blue, 1);
-
-  for (const placement of options.props ?? []) {
-    const definition = PROP_LIBRARY.find((p) => p.id === placement.id);
-    if (!definition) {
-      // A bad placement id is a content bug the validator is expected to have caught.
-      // Skipping keeps the arena from failing to build over one missing prop.
-      continue;
-    }
-    spawns.push(propSpawn(placement, definition));
-  }
+  spawns.push(...propSpawns(options.props ?? []));
 
   return {
     seed: options.seed ?? 20261002,
@@ -195,6 +205,101 @@ export function mechanismMatchup(fixedStepMs: number): BattleSetup {
     blue: ["blue.skirmisher", "blue.hexer", "blue.shrieker", "blue.rune"],
     props
   });
+}
+
+const RED_ROTATION = ["red.blade", "red.lancer", "red.caster", "red.bomber"] as const;
+const BLUE_ROTATION = ["blue.skirmisher", "blue.hexer", "blue.shrieker", "blue.rune"] as const;
+
+/**
+ * The architecture's stated stress case: 100 characters plus 20 field objects.
+ *
+ * `buildLineup` cannot express this. It lays a side out as a single column, so 50 units
+ * would need a 2700-unit-tall arena; this grids each side instead, which is also closer to
+ * how a crowded battle actually looks.
+ *
+ * The traps sit in a middle band, clear of both spawn grids. A trap overlapping a spawn
+ * would apply its effect before anyone could move, which measures the solver's
+ * deep-penetration resolution rather than the frame rate this scene exists to measure.
+ */
+export function stressMatchup(fixedStepMs: number, perSide = 50): BattleSetup {
+  const spawns: SpawnDef[] = [];
+  const columns = 5;
+  const rows = Math.ceil(perSide / columns);
+
+  const place = (
+    faction: "red" | "blue",
+    ids: readonly string[],
+    facing: number,
+    baseX: number,
+    /** Column step. Negative for the side that marches leftward. */
+    step: number
+  ): void => {
+    for (let i = 0; i < perSide; i += 1) {
+      const id = ids[i % ids.length];
+      if (id === undefined) {
+        continue;
+      }
+      const character = characterById(id);
+      if (!character) {
+        continue;
+      }
+      const column = Math.floor(i / rows);
+      const row = i % rows;
+      spawns.push({
+        kind: "unit",
+        faction,
+        // Columns step inward from the edge, rows run down the field. The step has to
+        // point away from the wall: five columns at 28 units starting from x=900 puts the
+        // last one at 1012, which is outside a 960-wide arena, and the unit spawns in the
+        // wall before the battle even starts.
+        x: baseX + column * step,
+        y: 40 + row * 58,
+        radius: character.radius,
+        mass: character.mass,
+        hp: character.hp,
+        facing,
+        characterId: character.id,
+        appearance: character.appearance,
+        tags: []
+      });
+    }
+  };
+
+  place("red", RED_ROTATION, 0, 60, 28);
+  place("blue", BLUE_ROTATION, Math.PI, 900, -28);
+
+  const mid = ARENA_BOUNDS.height / 2;
+  const kinds = [
+    "prop.lava",
+    "prop.conveyor",
+    "prop.spring",
+    "prop.barrel",
+    "prop.spike",
+    "prop.turret",
+    "prop.shrine"
+  ];
+  const props: PropPlacement[] = [];
+  for (let i = 0; i < 20; i += 1) {
+    const id = kinds[i % kinds.length];
+    if (id === undefined) {
+      continue;
+    }
+    props.push({
+      id,
+      x: 300 + (i % 5) * 90,
+      y: mid - 180 + Math.floor(i / 5) * 90,
+      facing: i % 2 === 0 ? 0 : Math.PI
+    });
+  }
+
+  return {
+    seed: 20261007,
+    fixedStepMs,
+    bounds: ARENA_BOUNDS,
+    spawns: [...spawns, ...propSpawns(props)],
+    abilities: abilitySpecs(),
+    characters: combatProfiles()
+  };
 }
 
 export function characterById(id: string): CharacterDef | undefined {

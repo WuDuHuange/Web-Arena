@@ -200,3 +200,266 @@ button:disabled {
   line-height: 1.6;
   color: var(--muted);
 }
+
+/* Pushes the help button to the far end of the header, away from the scene badges. */
+.app__help {
+  margin-left: auto;
+}
+
+/* --- Status lines ------------------------------------------------------- */
+
+.panel__ok,
+.panel__alert {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.panel__ok {
+  color: #2f7a4a;
+}
+
+.panel__alert {
+  color: #a3541c;
+}
+
+.panel__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transform: translateY(-1px);
+}
+
+.panel__dot--ok {
+  background: #46a06a;
+}
+
+.panel__dot--warn {
+  background: #d98634;
+}
+
+/* --- Validation and import issues --------------------------------------- */
+
+.panel__block--alert {
+  padding: 12px;
+  border: 1px solid #e6c49a;
+  border-radius: 8px;
+  background: #fdf7ef;
+}
+
+.panel__issues {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.panel__issues li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.panel__issues code {
+  font-size: 11px;
+  color: #8a5a24;
+  word-break: break-all;
+}
+
+.panel__issues span {
+  color: var(--muted);
+}
+
+.panel__block--alert button {
+  margin-top: 10px;
+}
+
+/* --- Credits ------------------------------------------------------------ */
+
+.panel__details {
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.panel__details summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.panel__appearances {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.panel__appearances li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.panel__appearances code {
+  font-size: 11px;
+  color: var(--text);
+}
+
+.panel__appearances span {
+  color: var(--muted);
+}
+
+.panel__note--future {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+.panel__note code {
+  font-size: 11px;
+}
+
+/* --- Help overlay ------------------------------------------------------- */
+
+.help {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 32px 20px;
+  overflow-y: auto;
+  background: rgba(18, 22, 30, 0.62);
+}
+
+.help__card {
+  width: min(760px, 100%);
+  padding: 28px 32px 24px;
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 18px 48px rgba(10, 14, 22, 0.32);
+}
+
+.help__header {
+  margin-bottom: 22px;
+}
+
+.help__header h2 {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: 0.02em;
+}
+
+.help__subtitle {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.help__section {
+  margin-bottom: 22px;
+}
+
+.help__section h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.help__section p {
+  margin: 0 0 8px;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.help__section code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--bg);
+  font-size: 12px;
+}
+
+.help__gap {
+  margin-top: 20px !important;
+}
+
+.help__hint {
+  color: var(--muted);
+  font-size: 13px !important;
+}
+
+.help__units,
+.help__props {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.help__units li,
+.help__props li {
+  display: grid;
+  grid-template-columns: 14px 130px 1fr;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.help__swatch {
+  width: 14px;
+  height: 14px;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  transform: translateY(2px);
+}
+
+.help__swatch--shot {
+  border-color: #fff6e0;
+  background: #ffd98a;
+}
+
+/* Occupies the swatch column for rows that have no colour to show. */
+.help__swatch--none {
+  background: transparent;
+  border-color: transparent;
+}
+
+.help__name {
+  font-weight: 600;
+}
+
+.help__desc {
+  color: var(--muted);
+}
+
+.help__footer {
+  display: flex;
+  gap: 10px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.help__footer button:first-child {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.help__footer button:first-child:hover:not(:disabled) {
+  color: #fff;
+  opacity: 0.9;
+}

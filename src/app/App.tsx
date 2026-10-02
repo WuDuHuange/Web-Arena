@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CONTENT_LIBRARY } from "../content/library.ts";
 import { validateContent } from "../content/validate.ts";
-import { defaultMatchup, mechanismMatchup, squadMatchup } from "../content/deployment.ts";
+import { defaultMatchup, mechanismMatchup, squadMatchup, stressMatchup } from "../content/deployment.ts";
 import { exportDeployment } from "../persistence/snapshot.ts";
+import { parseDeployment, summariseDeployment } from "../persistence/deployment-io.ts";
+import type { DeploymentSummary } from "../persistence/deployment-io.ts";
 import { createBattlefield } from "../render/battlefield.ts";
 import type { Battlefield } from "../render/battlefield.ts";
 import { createCueDetector } from "../audio/detect.ts";
@@ -11,6 +13,38 @@ import { createAudioEngine } from "../audio/synth.ts";
 import type { AudioEngine } from "../audio/synth.ts";
 import { Simulation } from "../simulation/index.ts";
 import type { BattleSetup } from "../simulation/index.ts";
+import { ContentIssues } from "./ContentIssues.tsx";
+import { CreditsPanel } from "./CreditsPanel.tsx";
+import { HelpOverlay } from "./HelpOverlay.tsx";
+
+/**
+ * Content validation, run once at module load.
+ *
+ * The library is static data, so this cannot change while the app is running. Computing it
+ * here rather than inside the effect keeps the result stable across re-renders and lets the
+ * panel render it on the very first paint.
+ */
+const VALIDATION = validateContent(CONTENT_LIBRARY);
+
+/** Marks the help overlay as read, so it only auto-opens once. */
+const HELP_SEEN_KEY = "project-arena.help.seen.v1";
+
+/** Browser storage throws in private modes; a missing key is the safe fallback. */
+function readHelpSeen(): boolean {
+  try {
+    return window.localStorage.getItem(HELP_SEEN_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
+function writeHelpSeen(): void {
+  try {
+    window.localStorage.setItem(HELP_SEEN_KEY, "1");
+  } catch {
+    // Not being able to remember is not a reason to fail the interaction.
+  }
+}
 
 type Phase = "editing" | "running" | "paused" | "decided";
 
@@ -32,6 +66,7 @@ const FIXED_STEP_MS = 1000 / 60;
  * `?scene=battle` is the default: one of each archetype per side. `squad` fields three
  * copies of each, which is the crowded case worth benchmarking. `mechanism` drops both
  * squads onto a floor full of traps, which is the scene that exercises the field layer.
+ * `stress` is the architecture's stated ceiling: 100 units plus 20 traps.
  */
 function resolveSetup(): { setup: BattleSetup; scene: string } {
   const requested = new URLSearchParams(window.location.search).get("scene") ?? "battle";
@@ -40,6 +75,8 @@ function resolveSetup(): { setup: BattleSetup; scene: string } {
       return { setup: squadMatchup(FIXED_STEP_MS, 3), scene: "squad" };
     case "mechanism":
       return { setup: mechanismMatchup(FIXED_STEP_MS), scene: "mechanism" };
+    case "stress":
+      return { setup: stressMatchup(FIXED_STEP_MS), scene: "stress" };
     default:
       return { setup: defaultMatchup(FIXED_STEP_MS), scene: "battle" };
   }
@@ -63,6 +100,10 @@ export function App() {
   const [phase, setPhase] = useState<Phase>("editing");
   const [scene] = useState<string>(() => resolveSetup().scene);
   const [muted, setMuted] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(() => !readHelpSeen());
+  const [importIssues, setImportIssues] = useState<readonly string[]>([]);
+  const [importSummary, setImportSummary] = useState<DeploymentSummary | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [readout, setReadout] = useState<Readout>({
     tick: 0,
     entities: 0,
@@ -83,11 +124,10 @@ export function App() {
       return;
     }
 
-    // Content is validated once, before anything is simulated. A broken library must fail
-    // here, loudly, rather than producing a battle where a unit silently never attacks.
-    const validation = validateContent(CONTENT_LIBRARY);
-    if (!validation.ok) {
-      console.error("content library is invalid", validation.issues);
+    // The library was validated once at module load. It is logged here as well as shown in
+    // the panel, because a head-less run has no panel and a CI log is where it gets read.
+    if (!VALIDATION.ok) {
+      console.error("content library is invalid", VALIDATION.issues);
     }
 
     const { setup } = resolveSetup();
@@ -245,9 +285,15 @@ export function App() {
     });
   }, []);
 
+  /**
+   * Restores the field to its starting state.
+   *
+   * Resets to whichever deployment is currently loaded, not to the scene default. After an
+   * import, "reset" has to mean "back to the imported lineup"; re-resolving the scene here
+   * would make the import evaporate the first time the button is pressed.
+   */
   const handleReset = useCallback(() => {
-    const { setup } = resolveSetup();
-    setupRef.current = setup;
+    const setup = setupRef.current;
     const simulation = new Simulation(setup);
     simulationRef.current = simulation;
     // Entity ids are handed out from zero again, so stale cue state would report phantom
@@ -256,6 +302,42 @@ export function App() {
     setReadout(readSummary(simulation));
     applyPhase("editing");
   }, [applyPhase]);
+
+  /**
+   * Loads a deployment from a file the user picked.
+   *
+   * The file is untrusted input — it may have been hand-edited — so it is parsed and
+   * validated before anything is built from it. A rejected file leaves the current battle
+   * untouched rather than replacing it with a broken field.
+   */
+  const handleDeploymentFile = useCallback(
+    (file: File) => {
+      void file
+        .text()
+        .then((text) => {
+          const result = parseDeployment(text);
+          if (!result.ok || !result.setup) {
+            setImportIssues(result.issues);
+            setImportSummary(null);
+            return;
+          }
+          const setup = result.setup;
+          setupRef.current = setup;
+          const simulation = new Simulation(setup);
+          simulationRef.current = simulation;
+          cuesRef.current?.reset();
+          setImportIssues([]);
+          setImportSummary(summariseDeployment(setup));
+          setReadout(readSummary(simulation));
+          applyPhase("editing");
+        })
+        .catch(() => {
+          setImportIssues(["读取文件失败"]);
+          setImportSummary(null);
+        });
+    },
+    [applyPhase]
+  );
 
   const handleExport = useCallback(() => {
     const blob = new Blob([exportDeployment(setupRef.current)], { type: "application/json" });
@@ -273,6 +355,9 @@ export function App() {
         <h1>Project Arena</h1>
         <span className="app__badge">对战闭环</span>
         <span className="app__badge">场景：{scene}</span>
+        <button type="button" className="app__help" onClick={() => setHelpOpen(true)}>
+          说明
+        </button>
       </header>
 
       <main className="app__main">
@@ -341,16 +426,80 @@ export function App() {
 
           <section className="panel__block">
             <h2>布阵</h2>
-            <button type="button" onClick={handleExport}>
-              导出布阵 JSON
-            </button>
+            <div className="panel__buttons">
+              <button type="button" onClick={handleExport}>
+                导出 JSON
+              </button>
+              <button type="button" onClick={() => fileInputRef.current?.click()}>
+                导入 JSON
+              </button>
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="application/json,.json"
+              hidden
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                // Clear the value first, or picking the same file twice in a row fires no
+                // change event the second time and the import appears to do nothing.
+                event.target.value = "";
+                if (file) {
+                  handleDeploymentFile(file);
+                }
+              }}
+            />
+            {importSummary ? (
+              <p className="panel__ok">
+                <span className="panel__dot panel__dot--ok" />
+                已载入 · {importSummary.units} 单位 / {importSummary.props} 机关 · {importSummary.bounds}
+              </p>
+            ) : null}
+            {importIssues.length > 0 ? (
+              <>
+                <p className="panel__alert">
+                  <span className="panel__dot panel__dot--warn" />
+                  布阵文件被拒绝，当前战场未改动
+                </p>
+                <ul className="panel__issues">
+                  {importIssues.map((issue, index) => (
+                    <li key={index}>
+                      <span>{issue}</span>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : null}
           </section>
+
+          <ContentIssues
+            result={VALIDATION}
+            characters={CONTENT_LIBRARY.characters.length}
+            abilities={CONTENT_LIBRARY.abilities.length}
+            props={CONTENT_LIBRARY.props.length}
+          />
+
+          <CreditsPanel />
 
           <p className="panel__note">
             近战、扇形、穿透直线与圆形范围已接入；七类机关（熔岩、传送带、弹簧、炸药桶、地刺、炮台、神龛）可仿真，表现与音效均为程序生成。Buff 与布阵编辑器尚未实现。
           </p>
         </aside>
       </main>
+
+      {helpOpen ? (
+        <HelpOverlay
+          fixedStepMs={FIXED_STEP_MS}
+          onClose={() => {
+            setHelpOpen(false);
+            writeHelpSeen();
+          }}
+          onDismissForever={() => {
+            setHelpOpen(false);
+            writeHelpSeen();
+          }}
+        />
+      ) : null}
     </div>
   );
 }

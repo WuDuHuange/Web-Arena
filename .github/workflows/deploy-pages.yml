@@ -2,7 +2,10 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    # This repository's default branch is `master`, not `main`. Listening for `main` here
+    # meant the deploy never fired once — a silent failure, since a workflow that never
+    # runs reports no error.
+    branches: [master]
   workflow_dispatch:
 
 permissions:

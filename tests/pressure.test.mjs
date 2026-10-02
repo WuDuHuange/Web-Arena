@@ -18,6 +18,7 @@ import {
   pressureSetup,
   tunnellingSetup
 } from "../src/simulation/pressure.ts";
+import { stressMatchup } from "../src/content/deployment.ts";
 
 const FIXED_STEP_MS = 1000 / 60;
 
@@ -137,6 +138,64 @@ test("fast projectiles do not pass through static props", () => {
       entity.motion.velocity.x < 1500,
       `projectile ${entity.id} never lost speed, suggesting it never collided`
     );
+  }
+});
+
+test("the browser stress scene really fields 100 units and 20 traps", () => {
+  // `pressureSetup` proves the solver survives 120 bodies. This proves the *shipped scene*
+  // does: a hand-built stress scene that quietly spawns 40 units measures nothing.
+  const setup = stressMatchup(FIXED_STEP_MS);
+  const units = setup.spawns.filter((s) => s.kind === "unit");
+  const props = setup.spawns.filter((s) => s.kind === "prop");
+
+  assert.equal(units.length, 100);
+  assert.equal(props.length, 20);
+  assert.equal(new Simulation(setup).snapshot().entities.length, 120);
+
+  // No spawn may start outside the arena. A unit spawned inside a wall is ejected by the
+  // solver on tick one, which shows up much later as "an entity escaped the bounds" and
+  // points at the physics rather than at the layout that caused it.
+  for (const spawn of setup.spawns) {
+    const r = spawn.radius;
+    assert.ok(
+      spawn.x - r >= 0 && spawn.x + r <= setup.bounds.width,
+      `spawn at x=${spawn.x} (r=${r}) lies outside the ${setup.bounds.width}-wide arena`
+    );
+    assert.ok(
+      spawn.y - r >= 0 && spawn.y + r <= setup.bounds.height,
+      `spawn at y=${spawn.y} (r=${r}) lies outside the ${setup.bounds.height}-tall arena`
+    );
+  }
+
+  // No spawn may start on top of another, or the opening seconds measure the solver's
+  // deep-penetration handling rather than the scene.
+  for (let i = 0; i < setup.spawns.length; i += 1) {
+    for (let j = i + 1; j < setup.spawns.length; j += 1) {
+      const a = setup.spawns[i];
+      const b = setup.spawns[j];
+      const gap = Math.hypot(a.x - b.x, a.y - b.y);
+      assert.ok(gap > 1, `spawns ${i} and ${j} start at the same point`);
+    }
+  }
+});
+
+test("the browser stress scene stays stable over a long run", () => {
+  const sim = new Simulation(stressMatchup(FIXED_STEP_MS));
+  runTicks(sim, 1800);
+
+  assertAllFinite(sim, "stress");
+
+  // Bounds come from the scene itself: it is built on the arena size, not the pressure one.
+  const bounds = sim.snapshot().entities.length > 0 ? { width: 960, height: 600 } : null;
+  assert.ok(bounds, "the scene must contain entities");
+  for (const entity of sim.snapshot().entities) {
+    if (entity.collider.fixed) {
+      continue;
+    }
+    const { x, y } = entity.transform.position;
+    const r = entity.collider.radius + 4;
+    assert.ok(x >= -r && x <= bounds.width + r, `entity ${entity.id} escaped on x (x=${x})`);
+    assert.ok(y >= -r && y <= bounds.height + r, `entity ${entity.id} escaped on y (y=${y})`);
   }
 });
 

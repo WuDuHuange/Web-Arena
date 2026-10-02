@@ -18,13 +18,19 @@ import type { Entity, PropTrigger } from "../simulation/types.ts";
  *   is always shown as a translucent field.
  */
 
-interface PropPalette {
+export interface PropPalette {
   readonly base: number;
   readonly glow: number;
   readonly edge: number;
 }
 
-const PALETTE: Record<PropTrigger, PropPalette> = {
+/**
+ * Exported so the in-app legend can show the same colours the battlefield draws with.
+ *
+ * A legend maintained separately from the renderer is a legend that eventually lies. This
+ * one cannot drift, because there is only one table.
+ */
+export const PROP_PALETTE: Record<PropTrigger, PropPalette> = {
   aura: { base: 0x5c2118, glow: 0xff7a3c, edge: 0x9a3a24 },
   conveyor: { base: 0x28313f, glow: 0x7fd4e8, edge: 0x46536b },
   spring: { base: 0x33402c, glow: 0xb8e06a, edge: 0x5b7149 },
@@ -47,7 +53,7 @@ export function drawProp(gfx: Graphics, entity: Entity, x: number, y: number, se
 
   gfx.clear();
 
-  const palette = PALETTE[behavior.kind];
+  const palette = PROP_PALETTE[behavior.kind];
   const radius = Math.max(behavior.radius, 1);
   const body = Math.max(entity.collider.radius, 1);
 

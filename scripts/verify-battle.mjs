@@ -7,6 +7,7 @@
  *
  * Usage: node scripts/verify-battle.mjs <pageUrl> [--port=9333] [--seconds=60]
  *                                       [--shot=out.png] [--shotAfter=6]
+ *                                       [--shotHelp=help.png]
  *
  * `--shot` captures a PNG mid-battle. Presentation changes cannot be asserted from the
  * DOM, so a screenshot is the only honest evidence that the field layer drew anything.
@@ -17,7 +18,9 @@ import { writeFile } from "node:fs/promises";
 const args = process.argv.slice(2);
 const pageUrl = args.find((a) => !a.startsWith("--"));
 if (!pageUrl) {
-  console.error("usage: node scripts/verify-battle.mjs <pageUrl> [--port=9333] [--seconds=60] [--shot=out.png]");
+  console.error(
+    "usage: node scripts/verify-battle.mjs <pageUrl> [--port=9333] [--seconds=60] [--shot=out.png] [--shotHelp=help.png]"
+  );
   process.exit(2);
 }
 
@@ -29,6 +32,7 @@ const port = Number(readFlag("port", "9333"));
 const maxSeconds = Number(readFlag("seconds", "60"));
 const shotPath = readFlag("shot", "");
 const shotAfterMs = Number(readFlag("shotAfter", "6")) * 1000;
+const shotHelpPath = readFlag("shotHelp", "");
 
 async function findPageTarget() {
   const deadline = Date.now() + 20_000;
@@ -100,6 +104,19 @@ await send("Runtime.enable");
 await send("Page.enable");
 await send("Page.navigate", { url: pageUrl });
 
+// The help overlay only auto-opens once per browser profile, so a second run would
+// capture an arena with no overlay and quietly prove nothing. Clear the flag and reload to
+// reproduce what a first-time visitor actually sees.
+if (shotHelpPath) {
+  await delay(700);
+  try {
+    await evaluate(`localStorage.removeItem("project-arena.help.seen.v1"), "cleared"`);
+  } catch {
+    // The document was not ready; the reload below still lands on a fresh state.
+  }
+  await send("Page.reload");
+}
+
 // Wait for the app to mount.
 let state = "pending";
 const deadline = Date.now() + 25_000;
@@ -136,6 +153,15 @@ const readState = `(() => {
 })()`;
 
 const initial = await evaluate(readState);
+
+// The first-run help overlay covers the arena on a fresh profile. Capture it if asked,
+// then dismiss it the way a user would before driving the battle.
+if (shotHelpPath) {
+  const shot = await send("Page.captureScreenshot", { format: "png" });
+  await writeFile(shotHelpPath, Buffer.from(shot.data, "base64"));
+}
+await evaluate(`document.querySelector(".help__footer button")?.click()`);
+await delay(200);
 
 // Start the battle the way a user would.
 await evaluate(`[...document.querySelectorAll(".panel__buttons button")].find((b) => b.textContent === "开战")?.click()`);
@@ -183,6 +209,7 @@ console.log(
       final,
       elapsedSeconds: elapsed / 1000,
       screenshot: shotPath || null,
+      helpScreenshot: shotHelpPath || null,
       afterReset,
       consoleErrors,
       exceptions
