@@ -174,6 +174,20 @@ export function HelpOverlay({ fixedStepMs, onClose, onDismissForever }: HelpOver
         </section>
 
         <section className="help__section">
+          <h3>自己布置战场</h3>
+          <p>
+            待命时战场就是编辑器：点<strong>＋</strong>把单位或机关放到场上，按住拖动位置，
+            选中后用 <strong>↺ / ↻</strong> 或 <strong>Q / E</strong> 调整朝向，方向键微调，
+            <strong>Delete</strong> 删除。按<strong>清空</strong>可以从空场开始，只放一个红方和一个蓝方就能打一局。
+          </p>
+          <p>
+            预览和实战是同一份数据——你在待命时看到的画面，就是开战后真正会跑的那一场。
+            选中会画一圈亮色环，画红虚线的位置表示它会被拒绝，比如压到别的单位身上或越出边界；
+            有红环时<strong>开战</strong>会被拦住，右侧会列出原因。
+          </p>
+        </section>
+
+        <section className="help__section">
           <h3>战场上你会看到</h3>
           <ul className="help__units">
             <li>
@@ -271,7 +285,9 @@ export function HelpOverlay({ fixedStepMs, onClose, onDismissForever }: HelpOver
             <li>
               <span className="help__swatch help__swatch--none" />
               <span className="help__name">导出 / 导入布阵</span>
-              <span className="help__desc">把当前布阵存成 JSON，或从文件读回一套布阵</span>
+              <span className="help__desc">
+                把当前布阵存成 JSON，或从文件读回一套布阵；读回的布阵同样可以继续编辑
+              </span>
             </li>
           </ul>
         </section>

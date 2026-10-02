@@ -473,3 +473,89 @@ button:disabled {
   color: #fff;
   opacity: 0.9;
 }
+
+/* --- Deployment editor --------------------------------------------------- */
+
+/*
+ * The palette is chips rather than a list, because adding is the most frequent action and
+ * every one of the eight characters plus seven props has to be reachable without scrolling
+ * past a description.
+ */
+
+.editor__summary {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.editor__group {
+  margin: 12px 0 6px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.editor__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.editor__chip {
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.editor__chip--red:hover:not(:disabled) {
+  border-color: #e0554b;
+  color: #c2453b;
+}
+
+.editor__chip--blue:hover:not(:disabled) {
+  border-color: #4b8fe0;
+  color: #3a76bd;
+}
+
+.editor__inspector {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.editor__selected {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.editor__inspector .panel__buttons {
+  margin-top: 10px;
+}
+
+.editor__hint {
+  margin: 12px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.editor__tags {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.editor__actions {
+  margin-top: 12px;
+}
+
+.roster__dot--neutral {
+  background: #9aa4b2;
+}

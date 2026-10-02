@@ -1,5 +1,6 @@
-import type { BattleSetup, CombatProfile, SpawnDef } from "../simulation/types.ts";
+import type { BattleSetup, CombatProfile, Faction, PropBehavior, SpawnDef } from "../simulation/types.ts";
 import type { AbilitySpec, BuffSpec } from "../simulation/types.ts";
+import type { DeploymentDraft, DraftBounds, DraftCatalog } from "../editor/draft.ts";
 import { BUFF_LIBRARY, CHARACTER_LIBRARY, CONTENT_LIBRARY, PROP_LIBRARY } from "./library.ts";
 import type { CharacterDef, PropDef, PropPlacement } from "./schema.ts";
 
@@ -52,13 +53,25 @@ export function buffSpecs(): readonly BuffSpec[] {
 }
 
 /**
- * Turns a prop placement into a spawn.
+ * The largest solid body a field object may have.
  *
  * The prop's collider is deliberately much smaller than its behaviour radius. A floor plate
  * is not a wall: if the collider matched the effect radius, the solver would eject any unit
  * standing on the tile before the mechanism could react, and every trap would be a bollard
  * that can never be triggered.
+ *
+ * Exported and used by both the spawn builder and the editor's validator, because those two
+ * disagreeing is exactly how a placement ends up legal in the editor and overlapping in the
+ * simulation.
  */
+export const PROP_BODY_MAX = 10;
+
+/** A field object's solid radius, from its authored behaviour. */
+export function propBodyRadius(definition: PropDef): number {
+  return Math.min(definition.behavior.radius, PROP_BODY_MAX);
+}
+
+/** Turns a prop placement into a spawn. */
 export function propSpawn(placement: PropPlacement, definition: PropDef): SpawnDef {
   return {
     kind: "prop",
@@ -69,7 +82,7 @@ export function propSpawn(placement: PropPlacement, definition: PropDef): SpawnD
     faction: "neutral",
     x: placement.x,
     y: placement.y,
-    radius: Math.min(definition.behavior.radius, 10),
+    radius: propBodyRadius(definition),
     mass: 3,
     hp: 1,
     facing: placement.facing ?? 0,
@@ -124,11 +137,17 @@ export function buildLineup(options: LineupOptions): BattleSetup {
 
 function pushSide(out: SpawnDef[], faction: "red" | "blue", ids: readonly string[], side: 0 | 1): void {
   const margin = 90;
-  const spacing = 56;
   const baseX = side === 0 ? margin : ARENA_BOUNDS.width - margin;
   const facing = side === 0 ? 0 : Math.PI;
 
   const count = ids.length;
+  // Spacing shrinks when a side is deep enough that a fixed step would run off the field.
+  // A 12-unit column at 56 units needs 616 of a 600-tall arena, which puts the first two
+  // units *outside the wall* — they spawn in it and the solver ejects them, so the opening
+  // of the battle is decided by a penetration resolution rather than by the deployment.
+  // Clamping here keeps every scene inside the arena whatever roster it is handed.
+  const spacing =
+    count > 1 ? Math.min(56, (ARENA_BOUNDS.height - 2 * margin) / (count - 1)) : 0;
   const totalHeight = (count - 1) * spacing;
   const startY = ARENA_BOUNDS.height / 2 - totalHeight / 2;
 
@@ -141,21 +160,154 @@ function pushSide(out: SpawnDef[], faction: "red" | "blue", ids: readonly string
       continue;
     }
 
-    out.push({
-      kind: "unit",
-      faction,
-      x: baseX + (i % 2) * 26,
-      y: startY + i * spacing,
-      radius: character.radius,
-      mass: character.mass,
-      hp: character.hp,
-      facing,
-      characterId: character.id,
-      appearance: character.appearance,
-      tags: []
-    });
+    out.push(
+      unitSpawn(character, faction, baseX + (i % 2) * 26, startY + i * spacing, facing)
+    );
   }
 }
+
+/**
+ * One unit's spawn, from a character definition and a position.
+ *
+ * Extracted so the hand-authored scenes and the player-authored draft build units through
+ * exactly one function. Two builders would eventually disagree about a default — `tags`,
+ * most likely — and a unit placed by hand would then fight differently from the identical
+ * unit placed by code, with nothing to point at.
+ *
+ * `tags` defaults to empty rather than to the character's own tags: the spawn-level list is
+ * an override, and `spawn.ts` already falls back to the character when it is empty.
+ */
+function unitSpawn(
+  character: CharacterDef,
+  faction: Faction,
+  x: number,
+  y: number,
+  facing: number,
+  tags: readonly string[] = []
+): SpawnDef {
+  return {
+    kind: "unit",
+    faction,
+    x,
+    y,
+    radius: character.radius,
+    mass: character.mass,
+    hp: character.hp,
+    facing,
+    characterId: character.id,
+    appearance: character.appearance,
+    tags: [...tags]
+  };
+}
+
+/**
+ * Matches a behaviour back to the prop that defines it.
+ *
+ * Needed because an imported deployment carries behaviour *values*, not the library id they
+ * came from — so reading one back has to recover the identity by comparing the data. Field
+ * by field against the library's own object, rather than by `kind` alone: the shipped
+ * library happens to have one prop per mechanism family today, and a lookup that depends on
+ * that coincidence breaks silently the day a second lava variant is added.
+ */
+function propIdOf(behavior: unknown): string | undefined {
+  if (!behavior || typeof behavior !== "object") {
+    return undefined;
+  }
+  const candidate = behavior as Record<string, unknown>;
+  const hit = PROP_LIBRARY.find((prop) => {
+    const known = prop.behavior as unknown as Record<string, unknown>;
+    return Object.keys(known).every((key) => known[key] === candidate[key]);
+  });
+  return hit?.id;
+}
+
+/** The prop-id lookup `draftFromSetup` needs, bound to the shipped library. */
+export const PROP_ID_OF_BEHAVIOR = propIdOf;
+
+export interface DraftToSetupOptions {
+  readonly fixedStepMs: number;
+  readonly seed?: number | undefined;
+  readonly bounds?: DraftBounds | undefined;
+  /**
+   * The setup this draft was derived from, if any.
+   *
+   * A `BattleSetup` carries more than placements: an ability list, a buff list, a character
+   * projection, a seed. The editor has no concept of any of them, so rebuilding from a draft
+   * alone would quietly discard them — and an imported deployment with a custom ability would
+   * come back from one nudge of a unit having lost it. Passing the original setup forward
+   * keeps everything the editor does not model.
+   */
+  readonly template?: BattleSetup | undefined;
+}
+
+/**
+ * Builds a battle from a player-authored draft.
+ *
+ * The draft is the only input for *placements*, so what the editor previewed is what gets
+ * simulated — there is no second path that could lay units out differently. That is the point
+ * of previewing through a real `WorldSnapshot` rather than drawing a separate editor overlay.
+ */
+export function draftToSetup(draft: DeploymentDraft, options: DraftToSetupOptions): BattleSetup {
+  const spawns: SpawnDef[] = [];
+
+  for (const placement of draft.units) {
+    const character = CHARACTER_LIBRARY.find((c) => c.id === placement.characterId);
+    if (!character) {
+      continue;
+    }
+    spawns.push(
+      unitSpawn(
+        character,
+        placement.faction,
+        placement.x,
+        placement.y,
+        placement.facing,
+        placement.tags ?? []
+      )
+    );
+  }
+
+  spawns.push(
+    ...propSpawns(draft.props.map((p) => ({ id: p.propId, x: p.x, y: p.y, facing: p.facing })))
+  );
+
+  const template = options.template;
+  return {
+    seed: options.seed ?? template?.seed ?? 20261002,
+    fixedStepMs: options.fixedStepMs,
+    bounds: options.bounds ?? template?.bounds ?? ARENA_BOUNDS,
+    spawns,
+    abilities: template?.abilities ?? abilitySpecs(),
+    buffs: template?.buffs ?? buffSpecs(),
+    characters: template?.characters ?? combatProfiles()
+  };
+}
+
+/** The library's behaviour for a prop id, for the editor's placement preview. */
+export function behaviorOf(propId: string): PropBehavior | undefined {
+  return PROP_LIBRARY.find((p) => p.id === propId)?.behavior;
+}
+
+/**
+ * The radii the draft validator needs, bound to the shipped library.
+ *
+ * This is the one place the editor learns anything about content, and it learns only sizes.
+ * `editor/draft.ts` stays free of the library so its rules can be tested with two numbers
+ * instead of a catalogue — the same reason the simulation core takes its abilities in a
+ * `BattleSetup` rather than importing them.
+ *
+ * `propBodyRadius` goes through the same function the spawn builder uses. A validator that
+ * checks a different radius from the one the solver will use is worse than no validator: it
+ * approves layouts that then overlap on tick 0.
+ */
+export const DRAFT_CATALOG: DraftCatalog = {
+  unitRadius: (characterId) => CHARACTER_LIBRARY.find((c) => c.id === characterId)?.radius,
+  propBodyRadius: (propId) => {
+    const definition = PROP_LIBRARY.find((p) => p.id === propId);
+    return definition ? propBodyRadius(definition) : undefined;
+  },
+  propEffectRadius: (propId) => PROP_LIBRARY.find((p) => p.id === propId)?.behavior.radius
+};
 
 /**
  * The default matchup: one of each archetype per side.
@@ -263,9 +415,14 @@ export function stressMatchup(fixedStepMs: number, perSide = 50): BattleSetup {
         kind: "unit",
         faction,
         // Columns step inward from the edge, rows run down the field. The step has to
-        // point away from the wall: five columns at 28 units starting from x=900 puts the
+        // point away from the wall: five columns at 34 units starting from x=900 puts the
         // last one at 1012, which is outside a 960-wide arena, and the unit spawns in the
         // wall before the battle even starts.
+        //
+        // 34 is not arbitrary either. The widest unit in the library is 15 units across, so
+        // two of them in the same row need 31.5 units of clearance; a 28-unit step is a
+        // 2-unit deep penetration on tick 0, which the solver resolves by shoving both
+        // units and which the deployment validator rightly refuses.
         x: baseX + column * step,
         y: 40 + row * 58,
         radius: character.radius,
@@ -279,8 +436,8 @@ export function stressMatchup(fixedStepMs: number, perSide = 50): BattleSetup {
     }
   };
 
-  place("red", RED_ROTATION, 0, 60, 28);
-  place("blue", BLUE_ROTATION, Math.PI, 900, -28);
+  place("red", RED_ROTATION, 0, 60, 34);
+  place("blue", BLUE_ROTATION, Math.PI, 900, -34);
 
   const mid = ARENA_BOUNDS.height / 2;
   const kinds = [

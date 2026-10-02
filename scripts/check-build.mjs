@@ -6,9 +6,11 @@
  *
  *   - An absolute asset path works at the domain root and 404s under a repository subpath.
  *     This is the single most common way a GitHub Pages deploy goes white.
- *   - A stale chunk from an earlier build stays on disk, because this project builds with
- *     `emptyOutDir: false` (the local safe-delete guard rejects bulk deletes). Publishing
- *     the directory wholesale then ships dead files.
+ *   - A stale chunk from an earlier build stays on disk. `vite.config.ts` sets
+ *     `emptyOutDir: true`, so a normal build clears the directory — but the local safe-delete
+ *     guard rejects bulk deletes over a threshold, and when that fires the build fails while
+ *     `dist/` keeps the previous generation. Publishing the directory wholesale then ships
+ *     dead files.
  *   - Sourcemaps get published, which is harmless for a game and not harmless in general.
  *
  * Run with: npm run check:build

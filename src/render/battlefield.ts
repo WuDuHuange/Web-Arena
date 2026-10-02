@@ -1,11 +1,32 @@
-import { Application, Container, Graphics } from "pixi.js";
+import { Application, Container, Graphics, Point } from "pixi.js";
 import type { Entity, WorldSnapshot } from "../simulation/types.ts";
 import { factionColor } from "./palette.ts";
+import { drawPlacementMarkers } from "./placement.ts";
+import type { PlacementMarker } from "./placement.ts";
 import { drawProp, drawProjectile } from "./props.ts";
 
 export interface BattlefieldBounds {
   readonly width: number;
   readonly height: number;
+}
+
+/** A point in world units, as opposed to the screen pixels a pointer event arrives in. */
+export interface WorldPoint {
+  readonly x: number;
+  readonly y: number;
+}
+
+/**
+ * Pointer callbacks, already converted to world units.
+ *
+ * Conversion happens inside the battlefield because it is the only thing that knows the
+ * container transform. Handing the editor raw client coordinates would put the fit
+ * calculation in two places, and the two would drift the first time the arena is letterboxed.
+ */
+export interface PointerHandlers {
+  down(point: WorldPoint): void;
+  move(point: WorldPoint): void;
+  up(point: WorldPoint): void;
 }
 
 export interface Battlefield {
@@ -17,6 +38,19 @@ export interface Battlefield {
    * to be frame-rate dependent when the tick is not.
    */
   render(snapshot: WorldSnapshot, alpha: number, elapsedMs?: number): void;
+  /** Replaces the editor decorations drawn over the battlefield. */
+  setMarkers(markers: readonly PlacementMarker[]): void;
+  /** Installs pointer callbacks, or `null` to ignore pointer input. */
+  setPointerHandlers(handlers: PointerHandlers | null): void;
+  /**
+   * Forgets the interpolation history without rebuilding the sprites.
+   *
+   * The editor rebuilds the whole world from the draft on every drag, and entity ids are
+   * handed out from zero again — so the previous frame's positions belong to a different
+   * layout. Without this, a dragged unit is drawn interpolating from where the *old* unit
+   * with the same id stood, and trails the cursor by a frame.
+   */
+  resetInterpolation(): void;
   destroy(): void;
 }
 
@@ -58,21 +92,29 @@ export async function createBattlefield(host: HTMLElement, bounds: BattlefieldBo
   const layer = new Container();
   app.stage.addChild(layer);
 
-  // Three layers, bottom to top: scenery, then units, then effects. A lava pool must never
-  // cover the units standing in it, or the fight becomes unreadable exactly where it is
-  // most interesting.
+  // Four layers, bottom to top: scenery, units, effects, then editor markers. A lava pool
+  // must never cover the units standing in it, or the fight becomes unreadable exactly
+  // where it is most interesting; the markers go above everything because their whole job is
+  // to be visible on top of whatever they are marking.
   const propLayer = new Container();
   const unitLayer = new Container();
   const fxLayer = new Container();
-  layer.addChild(propLayer, unitLayer, fxLayer);
+  const markerLayer = new Container();
+  layer.addChild(propLayer, unitLayer, fxLayer, markerLayer);
 
   // A subtle arena outline, so the playfield is legible against the app background.
   const frame = new Graphics();
   frame.rect(0, 0, bounds.width, bounds.height).stroke({ width: 2, color: 0x3a4152 });
   layer.addChildAt(frame, 0);
 
+  const markerGfx = new Graphics();
+  markerLayer.addChild(markerGfx);
+
   const sprites = new Map<number, UnitSprite>();
   const previous = new Map<number, ScreenPoint>();
+
+  let markers: readonly PlacementMarker[] = [];
+  let handlers: PointerHandlers | null = null;
 
   const fit = (): void => {
     const scale = Math.min(app.screen.width / bounds.width, app.screen.height / bounds.height);
@@ -80,6 +122,82 @@ export async function createBattlefield(host: HTMLElement, bounds: BattlefieldBo
   };
   fit();
   app.renderer.on("resize", fit);
+
+  /**
+   * Screen pixels to world units.
+   *
+   * The canvas is sized by `resizeTo: host`, so its CSS box and `app.screen` are the same
+   * size in the normal case — but `resolution` and `autoDensity` can make the backing store
+   * differ, and the ratio is two divisions. Scaling by it costs nothing and removes a whole
+   * class of "clicks land slightly off" bug that only shows up on a high-DPI display.
+   */
+  const toWorld = (clientX: number, clientY: number): WorldPoint => {
+    const rect = app.canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) {
+      return { x: 0, y: 0 };
+    }
+    const local = new Point(
+      ((clientX - rect.left) / rect.width) * app.screen.width,
+      ((clientY - rect.top) / rect.height) * app.screen.height
+    );
+    const world = layer.toLocal(local);
+    return { x: world.x, y: world.y };
+  };
+
+  /**
+   * Pointer handling uses DOM listeners on the canvas rather than Pixi's event system.
+   *
+   * The editor needs the pointer even when it is over empty floor, and it needs to keep
+   * receiving moves after the cursor leaves the canvas mid-drag. Both are one line with a
+   * DOM listener plus `setPointerCapture`, and both need a hit area the size of the arena
+   * plus event-mode bookkeeping with the Pixi route. The listeners are attached once and
+   * read the current handler, so installing and removing them does not churn the DOM.
+   */
+  const canvas = app.canvas;
+  let captured = false;
+
+  const onPointerDown = (event: PointerEvent): void => {
+    if (!handlers) {
+      return;
+    }
+    // Capture is what keeps a drag alive when the cursor leaves the canvas, but it throws
+    // if the pointer is already gone — a fast click, or a synthetic event. Losing capture is
+    // a degraded drag; throwing here would lose the whole gesture.
+    try {
+      canvas.setPointerCapture(event.pointerId);
+      captured = true;
+    } catch {
+      captured = false;
+    }
+    handlers.down(toWorld(event.clientX, event.clientY));
+  };
+
+  const onPointerMove = (event: PointerEvent): void => {
+    if (!handlers) {
+      return;
+    }
+    handlers.move(toWorld(event.clientX, event.clientY));
+  };
+
+  const onPointerUp = (event: PointerEvent): void => {
+    if (!handlers) {
+      return;
+    }
+    if (captured) {
+      try {
+        canvas.releasePointerCapture(event.pointerId);
+      } catch {
+        // Already released; nothing to undo.
+      }
+      captured = false;
+    }
+    handlers.up(toWorld(event.clientX, event.clientY));
+  };
+
+  canvas.addEventListener("pointerdown", onPointerDown);
+  canvas.addEventListener("pointermove", onPointerMove);
+  canvas.addEventListener("pointerup", onPointerUp);
+  canvas.addEventListener("pointercancel", onPointerUp);
 
   /**
    * Which draw layer an entity belongs to.
@@ -138,10 +256,32 @@ export async function createBattlefield(host: HTMLElement, bounds: BattlefieldBo
       for (const entity of snapshot.entities) {
         previous.set(entity.id, { x: entity.transform.position.x, y: entity.transform.position.y });
       }
+
+      // Markers are redrawn after the entity pass rather than in their own step, so they
+      // can never be left one frame stale relative to the layout they are annotating.
+      drawPlacementMarkers(markerGfx, markers);
+    },
+
+    setMarkers(next: readonly PlacementMarker[]): void {
+      markers = next;
+    },
+
+    setPointerHandlers(next: PointerHandlers | null): void {
+      handlers = next;
+      canvas.style.cursor = next ? "crosshair" : "default";
+    },
+
+    resetInterpolation(): void {
+      previous.clear();
     },
 
     destroy(): void {
       app.renderer.off("resize", fit);
+      canvas.removeEventListener("pointerdown", onPointerDown);
+      canvas.removeEventListener("pointermove", onPointerMove);
+      canvas.removeEventListener("pointerup", onPointerUp);
+      canvas.removeEventListener("pointercancel", onPointerUp);
+      handlers = null;
       app.destroy(true, { children: true });
     }
   };
