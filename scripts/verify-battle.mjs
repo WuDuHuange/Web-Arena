@@ -6,13 +6,18 @@
  * reports it. This drives the real build and reads the real DOM.
  *
  * Usage: node scripts/verify-battle.mjs <pageUrl> [--port=9333] [--seconds=60]
+ *                                       [--shot=out.png] [--shotAfter=6]
+ *
+ * `--shot` captures a PNG mid-battle. Presentation changes cannot be asserted from the
+ * DOM, so a screenshot is the only honest evidence that the field layer drew anything.
  */
 import { setTimeout as delay } from "node:timers/promises";
+import { writeFile } from "node:fs/promises";
 
 const args = process.argv.slice(2);
 const pageUrl = args.find((a) => !a.startsWith("--"));
 if (!pageUrl) {
-  console.error("usage: node scripts/verify-battle.mjs <pageUrl> [--port=9333] [--seconds=60]");
+  console.error("usage: node scripts/verify-battle.mjs <pageUrl> [--port=9333] [--seconds=60] [--shot=out.png]");
   process.exit(2);
 }
 
@@ -22,6 +27,8 @@ const readFlag = (name, fallback) => {
 };
 const port = Number(readFlag("port", "9333"));
 const maxSeconds = Number(readFlag("seconds", "60"));
+const shotPath = readFlag("shot", "");
+const shotAfterMs = Number(readFlag("shotAfter", "6")) * 1000;
 
 async function findPageTarget() {
   const deadline = Date.now() + 20_000;
@@ -111,7 +118,9 @@ while (Date.now() < deadline) {
 }
 
 if (state !== "ready") {
-  console.log(JSON.stringify({ ok: false, reason: state }, null, 2));
+  // Reporting only the state here would hide the actual cause, which is almost always an
+  // exception thrown while the renderer initialises.
+  console.log(JSON.stringify({ ok: false, reason: state, consoleErrors, exceptions }, null, 2));
   socket.close();
   process.exit(1);
 }
@@ -134,11 +143,21 @@ await evaluate(`[...document.querySelectorAll(".panel__buttons button")].find((b
 // Poll until the battle is decided or we run out of time.
 let final = initial;
 let elapsed = 0;
+let shotTaken = false;
 const tickInterval = 1000;
 while (elapsed < maxSeconds * 1000) {
   await delay(tickInterval);
   elapsed += tickInterval;
   final = await evaluate(readState);
+
+  // Capture mid-battle rather than at the end: a decided arena has no shots in flight and
+  // no traps mid-animation, which is precisely the state worth photographing.
+  if (shotPath && !shotTaken && elapsed >= shotAfterMs) {
+    const shot = await send("Page.captureScreenshot", { format: "png" });
+    await writeFile(shotPath, Buffer.from(shot.data, "base64"));
+    shotTaken = true;
+  }
+
   if (final.phase.includes("已分胜负")) {
     break;
   }
@@ -163,6 +182,7 @@ console.log(
       initial,
       final,
       elapsedSeconds: elapsed / 1000,
+      screenshot: shotPath || null,
       afterReset,
       consoleErrors,
       exceptions

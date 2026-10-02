@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CONTENT_LIBRARY } from "../content/library.ts";
 import { validateContent } from "../content/validate.ts";
-import { defaultMatchup, squadMatchup } from "../content/deployment.ts";
+import { defaultMatchup, mechanismMatchup, squadMatchup } from "../content/deployment.ts";
 import { exportDeployment } from "../persistence/snapshot.ts";
 import { createBattlefield } from "../render/battlefield.ts";
 import type { Battlefield } from "../render/battlefield.ts";
+import { createCueDetector } from "../audio/detect.ts";
+import type { CueDetector } from "../audio/detect.ts";
+import { createAudioEngine } from "../audio/synth.ts";
+import type { AudioEngine } from "../audio/synth.ts";
 import { Simulation } from "../simulation/index.ts";
 import type { BattleSetup } from "../simulation/index.ts";
 
@@ -16,6 +20,7 @@ interface Readout {
   droppedMs: number;
   redAlive: number;
   blueAlive: number;
+  mechanismDamage: number;
 }
 
 /** 60 Hz authoritative step. Render rate is free to differ. */
@@ -25,13 +30,16 @@ const FIXED_STEP_MS = 1000 / 60;
  * Which deployment this session fights.
  *
  * `?scene=battle` is the default: one of each archetype per side. `squad` fields three
- * copies of each, which is the crowded case worth benchmarking.
+ * copies of each, which is the crowded case worth benchmarking. `mechanism` drops both
+ * squads onto a floor full of traps, which is the scene that exercises the field layer.
  */
 function resolveSetup(): { setup: BattleSetup; scene: string } {
   const requested = new URLSearchParams(window.location.search).get("scene") ?? "battle";
   switch (requested) {
     case "squad":
       return { setup: squadMatchup(FIXED_STEP_MS, 3), scene: "squad" };
+    case "mechanism":
+      return { setup: mechanismMatchup(FIXED_STEP_MS), scene: "mechanism" };
     default:
       return { setup: defaultMatchup(FIXED_STEP_MS), scene: "battle" };
   }
@@ -49,15 +57,19 @@ export function App() {
   const battlefieldRef = useRef<Battlefield | null>(null);
   const phaseRef = useRef<Phase>("editing");
   const setupRef = useRef<BattleSetup>(defaultMatchup(FIXED_STEP_MS));
+  const audioRef = useRef<AudioEngine | null>(null);
+  const cuesRef = useRef<CueDetector | null>(null);
 
   const [phase, setPhase] = useState<Phase>("editing");
   const [scene] = useState<string>(() => resolveSetup().scene);
+  const [muted, setMuted] = useState(false);
   const [readout, setReadout] = useState<Readout>({
     tick: 0,
     entities: 0,
     droppedMs: 0,
     redAlive: 0,
-    blueAlive: 0
+    blueAlive: 0,
+    mechanismDamage: 0
   });
 
   const applyPhase = useCallback((next: Phase) => {
@@ -140,6 +152,17 @@ export function App() {
     (window as unknown as { __arenaBench?: typeof bench }).__arenaBench = bench;
 
     simulationRef.current = new Simulation(setup);
+    // Populate the panel immediately, so the first quarter second does not read as an
+    // empty arena.
+    setReadout(readSummary(simulationRef.current));
+
+    // Audio is built eagerly but stays silent until a gesture unlocks the context, and it
+    // degrades to a no-op engine if the browser has no WebAudio at all. Nothing in the
+    // battle path checks whether sound succeeded.
+    const audio = createAudioEngine();
+    const cues = createCueDetector();
+    audioRef.current = audio;
+    cuesRef.current = cues;
 
     const loop = (now: number): void => {
       if (disposed) {
@@ -155,12 +178,18 @@ export function App() {
       if (simulation) {
         if (phaseRef.current === "running") {
           simulation.advance(delta);
+          const snapshot = simulation.snapshot();
+          // Cues are derived from the snapshot, never emitted by the simulation, so a
+          // dropped or duplicated frame can only affect sound — never battle state.
+          for (const event of cues.detect(snapshot)) {
+            audio.play(event.cue, event.intensity);
+          }
           if (simulation.decided) {
             // Freeze on the result rather than letting the last survivor keep walking.
             applyPhase("decided");
           }
         }
-        battlefieldRef.current?.render(simulation.snapshot(), simulation.alpha);
+        battlefieldRef.current?.render(simulation.snapshot(), simulation.alpha, now);
       }
 
       frame = window.requestAnimationFrame(loop);
@@ -180,14 +209,7 @@ export function App() {
       if (!simulation) {
         return;
       }
-      const entities = simulation.snapshot().entities;
-      setReadout({
-        tick: simulation.tick,
-        entities: entities.length,
-        droppedMs: Math.round(simulation.droppedMs),
-        redAlive: entities.filter((e) => e.combat && e.faction === "red").length,
-        blueAlive: entities.filter((e) => e.combat && e.faction === "blue").length
-      });
+      setReadout(readSummary(simulation));
     }, 250);
 
     return () => {
@@ -197,22 +219,41 @@ export function App() {
       battlefieldRef.current?.destroy();
       battlefieldRef.current = null;
       simulationRef.current = null;
+      audioRef.current?.destroy();
+      audioRef.current = null;
+      cuesRef.current = null;
       delete (window as unknown as { __arenaBench?: unknown }).__arenaBench;
     };
   }, [applyPhase]);
+
+  /**
+   * Starts a battle.
+   *
+   * This doubles as the gesture that unlocks WebAudio — browsers refuse to start an
+   * AudioContext without one — so the engine is resumed here rather than at construction.
+   */
+  const handleStart = useCallback(() => {
+    audioRef.current?.resume();
+    applyPhase("running");
+  }, [applyPhase]);
+
+  const handleToggleMute = useCallback(() => {
+    setMuted((previous) => {
+      const next = !previous;
+      audioRef.current?.setMuted(next);
+      return next;
+    });
+  }, []);
 
   const handleReset = useCallback(() => {
     const { setup } = resolveSetup();
     setupRef.current = setup;
     const simulation = new Simulation(setup);
     simulationRef.current = simulation;
-    setReadout({
-      tick: 0,
-      entities: simulation.snapshot().entities.length,
-      droppedMs: 0,
-      redAlive: simulation.snapshot().entities.filter((e) => e.combat && e.faction === "red").length,
-      blueAlive: simulation.snapshot().entities.filter((e) => e.combat && e.faction === "blue").length
-    });
+    // Entity ids are handed out from zero again, so stale cue state would report phantom
+    // damage on the first frames of the new battle.
+    cuesRef.current?.reset();
+    setReadout(readSummary(simulation));
     applyPhase("editing");
   }, [applyPhase]);
 
@@ -244,7 +285,7 @@ export function App() {
             <div className="panel__buttons">
               <button
                 type="button"
-                onClick={() => applyPhase("running")}
+                onClick={handleStart}
                 disabled={phase === "running" || phase === "decided"}
               >
                 开战
@@ -254,6 +295,9 @@ export function App() {
               </button>
               <button type="button" onClick={handleReset}>
                 重置
+              </button>
+              <button type="button" onClick={handleToggleMute}>
+                {muted ? "音效：关" : "音效：开"}
               </button>
             </div>
           </section>
@@ -277,6 +321,8 @@ export function App() {
               <dd>{readout.entities}</dd>
               <dt>丢弃模拟时间</dt>
               <dd>{readout.droppedMs} ms</dd>
+              <dt>机关伤害</dt>
+              <dd>{readout.mechanismDamage}</dd>
             </dl>
           </section>
 
@@ -301,7 +347,7 @@ export function App() {
           </section>
 
           <p className="panel__note">
-            近战、扇形、穿透直线与圆形范围已接入。机关陷阱、Buff 与编辑器尚未实现。
+            近战、扇形、穿透直线与圆形范围已接入；七类机关（熔岩、传送带、弹簧、炸药桶、地刺、炮台、神龛）可仿真，表现与音效均为程序生成。Buff 与布阵编辑器尚未实现。
           </p>
         </aside>
       </main>
@@ -320,4 +366,23 @@ function phaseLabel(phase: Phase): string {
     case "decided":
       return "已分胜负";
   }
+}
+
+/**
+ * Reads the low-frequency summary the panel shows.
+ *
+ * Shared by the poll, the reset handler and the initial mount so the three can never
+ * disagree. Without the mount call the panel reads all zeroes for the first quarter
+ * second, which looks like an empty arena rather than a field waiting to start.
+ */
+function readSummary(simulation: Simulation): Readout {
+  const entities = simulation.snapshot().entities;
+  return {
+    tick: simulation.tick,
+    entities: entities.length,
+    droppedMs: Math.round(simulation.droppedMs),
+    redAlive: entities.filter((e) => e.combat && e.faction === "red").length,
+    blueAlive: entities.filter((e) => e.combat && e.faction === "blue").length,
+    mechanismDamage: Math.round(simulation.mechanismDamage)
+  };
 }

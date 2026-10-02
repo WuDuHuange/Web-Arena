@@ -1,4 +1,4 @@
-import type { AbilitySpec } from "../simulation/types.ts";
+import type { AbilitySpec, PropBehavior } from "../simulation/types.ts";
 
 /**
  * Content definitions. JSON is the source of truth at runtime; these interfaces are the
@@ -42,12 +42,30 @@ export interface CharacterDef {
   readonly aggroRange: number;
 }
 
+/**
+ * A field object.
+ *
+ * `behavior` is the same structure the simulation consumes, for the same reason
+ * `AbilityDef.spec` is: one shape to keep in sync instead of two that drift.
+ *
+ * `appearance` is deliberately a free-form string with no relation to `behavior`. That
+ * separation is what makes "swapping art must not change collision or damage" checkable
+ * rather than aspirational: a test can hold `behavior` fixed and vary only this key.
+ */
 export interface PropDef {
   readonly id: string;
   readonly name: string;
-  /** Reuses the same trigger/effect vocabulary as characters. */
-  readonly trigger: "aura" | "conveyor" | "spring" | "explosive" | "spike" | "turret" | "shrine";
+  readonly behavior: PropBehavior;
   readonly appearance: string;
+}
+
+/** A prop as it is placed on the field. Position is deployment's business, not the catalog's. */
+export interface PropPlacement {
+  readonly id: string;
+  readonly x: number;
+  readonly y: number;
+  /** Overrides the catalog facing. Defaults to the prop definition's own. */
+  readonly facing?: number;
 }
 
 export interface ContentLibrary {

@@ -269,18 +269,135 @@ export const CHARACTER_LIBRARY: readonly CharacterDef[] = [
 ];
 
 /**
- * Field objects are declared but not yet simulated; Phase 3 wires up their triggers.
- * They are listed here so the library validates as a whole and so the shape of the data
- * is settled before the behaviour lands.
+ * Field objects.
+ *
+ * Balance scaffolding, same as the characters: the numbers are chosen so each mechanism's
+ * behaviour is *visible* in a few seconds of watching, not so they are fair. A test that
+ * has to run 3000 ticks to see a spike go off is a test nobody will trust.
+ *
+ * `appearance` carries no behaviour. It exists so the renderer — and a future asset
+ * pipeline — can change what a mechanism looks like without touching what it does.
  */
 export const PROP_LIBRARY: readonly PropDef[] = [
-  { id: "prop.lava", name: "熔岩", trigger: "aura", appearance: "prop-lava" },
-  { id: "prop.conveyor", name: "传送带", trigger: "conveyor", appearance: "prop-conveyor" },
-  { id: "prop.spring", name: "弹簧板", trigger: "spring", appearance: "prop-spring" },
-  { id: "prop.barrel", name: "炸药桶", trigger: "explosive", appearance: "prop-barrel" },
-  { id: "prop.spike", name: "地刺", trigger: "spike", appearance: "prop-spike" },
-  { id: "prop.turret", name: "炮台", trigger: "turret", appearance: "prop-turret" },
-  { id: "prop.shrine", name: "祭坛", trigger: "shrine", appearance: "prop-shrine" }
+  {
+    id: "prop.lava",
+    name: "熔岩",
+    appearance: "prop-lava",
+    behavior: {
+      kind: "aura",
+      radius: 54,
+      // 6 damage every 30 ticks: one second of standing in it costs 6, and the interval
+      // is what keeps a 60 Hz tick from turning that into 360.
+      damage: 6,
+      intervalTicks: 30,
+      cooldownTicks: 0,
+      force: 0,
+      reach: 0,
+      affects: "all"
+    }
+  },
+  {
+    id: "prop.conveyor",
+    name: "传送带",
+    appearance: "prop-conveyor",
+    behavior: {
+      kind: "conveyor",
+      radius: 70,
+      damage: 0,
+      intervalTicks: 0,
+      cooldownTicks: 0,
+      // Applied as a velocity overlay every tick, so it moves a unit regardless of what
+      // the unit is trying to do — that is what makes it a terrain feature rather than a
+      // suggestion the AI can outvote.
+      force: 84,
+      reach: 0,
+      affects: "all"
+    }
+  },
+  {
+    id: "prop.spring",
+    name: "弹簧板",
+    appearance: "prop-spring",
+    behavior: {
+      kind: "spring",
+      radius: 26,
+      damage: 0,
+      intervalTicks: 0,
+      // Short cooldown: a spring that fires once per second reads as a trap, not a launcher.
+      cooldownTicks: 45,
+      force: 320,
+      reach: 26,
+      affects: "all"
+    }
+  },
+  {
+    id: "prop.barrel",
+    name: "炸药桶",
+    appearance: "prop-barrel",
+    behavior: {
+      kind: "explosive",
+      radius: 22,
+      damage: 34,
+      intervalTicks: 0,
+      cooldownTicks: 0,
+      force: 260,
+      reach: 96,
+      // Chain radius is smaller than the blast radius on purpose: two barrels at the edge
+      // of the same blast should not reliably set each other off, or a dense cluster
+      // becomes a single unavoidable wipe.
+      chainRadius: 78,
+      affects: "all"
+    }
+  },
+  {
+    id: "prop.spike",
+    name: "地刺",
+    appearance: "prop-spike",
+    behavior: {
+      kind: "spike",
+      radius: 30,
+      damage: 16,
+      intervalTicks: 0,
+      // Fires on entry, then stays down for about a second and a half. Long enough that a
+      // unit standing on it is not shredded, short enough that it still matters.
+      cooldownTicks: 90,
+      force: 0,
+      reach: 30,
+      affects: "all"
+    }
+  },
+  {
+    id: "prop.turret",
+    name: "炮台",
+    appearance: "prop-turret",
+    behavior: {
+      kind: "turret",
+      radius: 24,
+      damage: 9,
+      intervalTicks: 70,
+      cooldownTicks: 0,
+      force: 0,
+      reach: 240,
+      projectileSpeed: 300,
+      affects: "hostile"
+    }
+  },
+  {
+    id: "prop.shrine",
+    name: "祭坛",
+    appearance: "prop-shrine",
+    behavior: {
+      kind: "shrine",
+      radius: 34,
+      damage: 13,
+      intervalTicks: 110,
+      cooldownTicks: 0,
+      force: 0,
+      reach: 200,
+      projectileSpeed: 190,
+      affects: "hostile"
+    }
+  }
 ];
 
 export const CONTENT_LIBRARY: ContentLibrary = {
@@ -292,4 +409,9 @@ export const CONTENT_LIBRARY: ContentLibrary = {
 /** Looks up a character definition by id. */
 export function findCharacter(id: string): CharacterDef | undefined {
   return CHARACTER_LIBRARY.find((c) => c.id === id);
+}
+
+/** Looks up a prop definition by id. */
+export function findProp(id: string): PropDef | undefined {
+  return PROP_LIBRARY.find((p) => p.id === id);
 }

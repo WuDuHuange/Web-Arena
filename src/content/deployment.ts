@@ -1,7 +1,7 @@
 import type { BattleSetup, CombatProfile, SpawnDef } from "../simulation/types.ts";
 import type { AbilitySpec } from "../simulation/types.ts";
-import { CHARACTER_LIBRARY, CONTENT_LIBRARY } from "./library.ts";
-import type { CharacterDef } from "./schema.ts";
+import { CHARACTER_LIBRARY, CONTENT_LIBRARY, PROP_LIBRARY } from "./library.ts";
+import type { CharacterDef, PropDef, PropPlacement } from "./schema.ts";
 
 /**
  * Builds an actual battle out of the content library.
@@ -19,6 +19,8 @@ export interface LineupOptions {
   /** Character ids on each side, in placement order. */
   readonly red: readonly string[];
   readonly blue: readonly string[];
+  /** Field objects to place, by library id. Omitted means an empty arena. */
+  readonly props?: readonly PropPlacement[];
 }
 
 /** The simulation-relevant projection of every character in the library. */
@@ -37,6 +39,33 @@ export function abilitySpecs(): readonly AbilitySpec[] {
 }
 
 /**
+ * Turns a prop placement into a spawn.
+ *
+ * The prop's collider is deliberately much smaller than its behaviour radius. A floor plate
+ * is not a wall: if the collider matched the effect radius, the solver would eject any unit
+ * standing on the tile before the mechanism could react, and every trap would be a bollard
+ * that can never be triggered.
+ */
+export function propSpawn(placement: PropPlacement, definition: PropDef): SpawnDef {
+  return {
+    kind: "prop",
+    // Field objects are neutral, always. A hazard belongs to nobody: `affects: "hostile"`
+    // on an emitter already means "shoot whoever is not on my side", and since the prop has
+    // no side, that reads as "shoot everyone". Assigning a team here would silently make a
+    // trap safe for half the arena.
+    faction: "neutral",
+    x: placement.x,
+    y: placement.y,
+    radius: Math.min(definition.behavior.radius, 10),
+    mass: 3,
+    hp: 1,
+    facing: placement.facing ?? 0,
+    behavior: definition.behavior,
+    appearance: definition.appearance
+  };
+}
+
+/**
  * Places a lineup on the field.
  *
  * Each side is arranged in a column near its own edge and spaced so that no two units
@@ -48,6 +77,16 @@ export function buildLineup(options: LineupOptions): BattleSetup {
 
   pushSide(spawns, "red", options.red, 0);
   pushSide(spawns, "blue", options.blue, 1);
+
+  for (const placement of options.props ?? []) {
+    const definition = PROP_LIBRARY.find((p) => p.id === placement.id);
+    if (!definition) {
+      // A bad placement id is a content bug the validator is expected to have caught.
+      // Skipping keeps the arena from failing to build over one missing prop.
+      continue;
+    }
+    spawns.push(propSpawn(placement, definition));
+  }
 
   return {
     seed: options.seed ?? 20261002,
@@ -117,6 +156,45 @@ export function squadMatchup(fixedStepMs: number, copies = 3): BattleSetup {
     blue.push("blue.skirmisher", "blue.hexer", "blue.shrieker", "blue.rune");
   }
   return buildLineup({ fixedStepMs, red, blue });
+}
+
+/**
+ * The Phase 3 acceptance scene: every mechanism on the field, with both rosters present.
+ *
+ * Laid out as a corridor rather than a scatter. Each mechanism needs to be *reachable* by a
+ * unit walking across the middle, because a mechanism nobody can step on is a mechanism
+ * whose behaviour is never exercised — and the whole point of this scene is that a single
+ * run touches all seven.
+ */
+export function mechanismMatchup(fixedStepMs: number): BattleSetup {
+  const mid = ARENA_BOUNDS.height / 2;
+
+  const props: PropPlacement[] = [
+    // A lava pool and a conveyor across the midline: the two continuous sources.
+    { id: "prop.lava", x: 430, y: mid },
+    { id: "prop.conveyor", x: 520, y: mid - 90 },
+
+    // Triggers on the approach, so a unit crossing the field walks onto one.
+    { id: "prop.spike", x: 360, y: mid + 80 },
+    { id: "prop.spring", x: 360, y: mid - 80, facing: Math.PI },
+    { id: "prop.barrel", x: 600, y: mid + 70 },
+    { id: "prop.barrel", x: 660, y: mid + 70 },
+
+    // Emitters placed *inside* the contested band rather than at an edge. A turret parked
+    // behind its own line never fires: the battle is decided around the midline, and by the
+    // time anything wandered back into its reach the fight would already be over. Reach is
+    // large, so the constraint is really the distance to the crossing, not the range.
+    { id: "prop.turret", x: 560, y: mid + 170 },
+    { id: "prop.shrine", x: 560, y: mid - 170 }
+  ];
+
+  return buildLineup({
+    fixedStepMs,
+    seed: 20261005,
+    red: ["red.blade", "red.lancer", "red.caster", "red.bomber"],
+    blue: ["blue.skirmisher", "blue.hexer", "blue.shrieker", "blue.rune"],
+    props
+  });
 }
 
 export function characterById(id: string): CharacterDef | undefined {

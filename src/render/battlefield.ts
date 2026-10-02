@@ -1,6 +1,7 @@
 import { Application, Container, Graphics } from "pixi.js";
 import type { Entity, WorldSnapshot } from "../simulation/types.ts";
 import { factionColor } from "./palette.ts";
+import { drawProp, drawProjectile } from "./props.ts";
 
 export interface BattlefieldBounds {
   readonly width: number;
@@ -8,8 +9,14 @@ export interface BattlefieldBounds {
 }
 
 export interface Battlefield {
-  /** Draws a snapshot, interpolating from the previous one by `alpha`. */
-  render(snapshot: WorldSnapshot, alpha: number): void;
+  /**
+   * Draws a snapshot, interpolating from the previous one by `alpha`.
+   *
+   * `elapsedMs` is a presentation clock for decoration only — trap pulses, belt chevrons.
+   * Nothing animated from it can influence the simulation, which is why it is safe for it
+   * to be frame-rate dependent when the tick is not.
+   */
+  render(snapshot: WorldSnapshot, alpha: number, elapsedMs?: number): void;
   destroy(): void;
 }
 
@@ -51,10 +58,18 @@ export async function createBattlefield(host: HTMLElement, bounds: BattlefieldBo
   const layer = new Container();
   app.stage.addChild(layer);
 
+  // Three layers, bottom to top: scenery, then units, then effects. A lava pool must never
+  // cover the units standing in it, or the fight becomes unreadable exactly where it is
+  // most interesting.
+  const propLayer = new Container();
+  const unitLayer = new Container();
+  const fxLayer = new Container();
+  layer.addChild(propLayer, unitLayer, fxLayer);
+
   // A subtle arena outline, so the playfield is legible against the app background.
   const frame = new Graphics();
   frame.rect(0, 0, bounds.width, bounds.height).stroke({ width: 2, color: 0x3a4152 });
-  layer.addChild(frame);
+  layer.addChildAt(frame, 0);
 
   const sprites = new Map<number, UnitSprite>();
   const previous = new Map<number, ScreenPoint>();
@@ -66,9 +81,27 @@ export async function createBattlefield(host: HTMLElement, bounds: BattlefieldBo
   fit();
   app.renderer.on("resize", fit);
 
+  /**
+   * Which draw layer an entity belongs to.
+   *
+   * Resolved once, when its sprite is created: an entity's role never changes mid-battle,
+   * and a trap that migrated into the unit layer would end up drawn over the very units
+   * standing in it.
+   */
+  const layerFor = (entity: Entity): Container => {
+    if (entity.behavior) {
+      return propLayer;
+    }
+    if (entity.projectile) {
+      return fxLayer;
+    }
+    return unitLayer;
+  };
+
   return {
-    render(snapshot: WorldSnapshot, alpha: number): void {
+    render(snapshot: WorldSnapshot, alpha: number, elapsedMs = 0): void {
       const seen = new Set<number>();
+      const seconds = elapsedMs / 1000;
 
       for (const entity of snapshot.entities) {
         seen.add(entity.id);
@@ -77,7 +110,7 @@ export async function createBattlefield(host: HTMLElement, bounds: BattlefieldBo
         if (!sprite) {
           sprite = { gfx: new Graphics() };
           sprites.set(entity.id, sprite);
-          layer.addChild(sprite.gfx);
+          layerFor(entity).addChild(sprite.gfx);
         }
 
         const target = entity.transform.position;
@@ -85,7 +118,13 @@ export async function createBattlefield(host: HTMLElement, bounds: BattlefieldBo
         const x = last ? last.x + (target.x - last.x) * alpha : target.x;
         const y = last ? last.y + (target.y - last.y) * alpha : target.y;
 
-        drawEntity(sprite.gfx, entity, x, y);
+        if (entity.behavior) {
+          drawProp(sprite.gfx, entity, x, y, seconds);
+        } else if (entity.projectile) {
+          drawProjectile(sprite.gfx, entity, x, y);
+        } else {
+          drawEntity(sprite.gfx, entity, x, y);
+        }
       }
 
       for (const [id, sprite] of sprites) {

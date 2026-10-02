@@ -36,6 +36,52 @@ function toEntity(
     render: { appearance: spawn.appearance ?? defaultAppearance(spawn) }
   };
 
+  // Only a projectile carries its own velocity between ticks.
+  //
+  // It is a kinematic mover: it is in the physics world so it can shove bodies aside, never
+  // so the solver can steer it, and nothing else would move it. A *unit* is the opposite
+  // case — either an AI decides its motion every tick, or it is a plain physical body whose
+  // motion the solver owns. Handing a unit a persistent velocity would make a bouncing body
+  // keep its pre-bounce speed while the solver holds it against a wall, which is a body
+  // reporting one thing and doing another.
+  if (spawn.kind === "projectile") {
+    base.persistentVelocity = { x: spawn.vx ?? 0, y: spawn.vy ?? 0 };
+  }
+
+  if (spawn.behavior) {
+    // Phase offsets are derived from the spawn coordinates rather than drawn from the
+    // RNG, so a mechanism's cadence does not shift when something unrelated upstream
+    // consumes a random number. Tying the phase to position also makes two identical
+    // mechanisms placed symmetrically fire together, which is what reads as intended.
+    const phase = Math.abs(Math.round(spawn.x * 7 + spawn.y * 13)) % Math.max(spawn.behavior.intervalTicks, 1);
+    const withBehavior: Omit<Entity, "id"> = {
+      ...base,
+      behavior: spawn.behavior,
+      mechanism: {
+        cooldownTicksLeft: 0,
+        intervalTicksLeft: phase,
+        latched: false
+      }
+    };
+    return withCombat(withBehavior, spawn, setup, abilitiesById);
+  }
+
+  return withCombat(base, spawn, setup, abilitiesById);
+}
+
+/**
+ * Attaches a combat component when the spawn names a character.
+ *
+ * Split out of `toEntity` so the mechanism branch above does not have to duplicate the
+ * ability resolution, and so a prop and a unit take exactly the same path to getting a
+ * combat component.
+ */
+function withCombat(
+  base: Omit<Entity, "id">,
+  spawn: SpawnDef,
+  setup: BattleSetup,
+  abilitiesById: Map<string, AbilitySpec>
+): Omit<Entity, "id"> {
   const character = spawn.characterId
     ? setup.characters?.find((c) => c.id === spawn.characterId)
     : undefined;

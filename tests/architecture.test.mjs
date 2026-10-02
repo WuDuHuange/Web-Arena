@@ -136,6 +136,22 @@ function makeAbility(id) {
   };
 }
 
+/** A minimal valid mechanism, so the prop branch of the validator has parameters to check. */
+function makePropBehavior(overrides = {}) {
+  return {
+    kind: "explosive",
+    radius: 20,
+    damage: 10,
+    intervalTicks: 0,
+    cooldownTicks: 0,
+    force: 100,
+    reach: 80,
+    chainRadius: 60,
+    affects: "all",
+    ...overrides
+  };
+}
+
 function makeValidLibrary() {
   return {
     abilities: [makeAbility("shot")],
@@ -153,7 +169,7 @@ function makeValidLibrary() {
         aggroRange: 400
       }
     ],
-    props: [{ id: "barrel", name: "Barrel", trigger: "explosive", appearance: "barrel" }]
+    props: [{ id: "barrel", name: "Barrel", behavior: makePropBehavior(), appearance: "barrel" }]
   };
 }
 

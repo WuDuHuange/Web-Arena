@@ -1,4 +1,5 @@
 import Matter from "matter-js";
+import type { Entity } from "../simulation/types.ts";
 import type { World } from "../simulation/world.ts";
 
 export interface PhysicsBounds {
@@ -44,6 +45,23 @@ export class PhysicsAdapter {
     this.addWalls(bounds);
   }
 
+  /**
+   * Creates bodies for any entity that does not have one yet, leaving existing bodies
+   * untouched.
+   *
+   * Used when the world grows mid-tick. A full `sync` would be correct too but it walks
+   * every entity on every shot fired, and it also re-pushes positions, which would undo a
+   * step that has already been taken this tick.
+   */
+  spawn(world: World): void {
+    for (const entity of world.all()) {
+      if (this.bodies.has(entity.id)) {
+        continue;
+      }
+      this.createBody(entity);
+    }
+  }
+
   /** Creates missing bodies and pushes authoritative positions into Matter. */
   sync(world: World): void {
     for (const entity of world.all()) {
@@ -62,34 +80,38 @@ export class PhysicsAdapter {
         continue;
       }
 
-      const isDynamic = !entity.collider.fixed;
-      const body = Matter.Bodies.circle(
-        entity.transform.position.x,
-        entity.transform.position.y,
-        entity.collider.radius,
-        {
-          isStatic: !isDynamic,
-          friction: 0,
-          frictionAir: 0,
-          restitution: 0.6,
-          label: `entity:${entity.id}`
-        }
-      );
-
-      // Only dynamic bodies get an explicit mass. A static body carries infinite mass by
-      // design, and `Body.setMass` on it divides Infinity by Infinity: the resulting NaN
-      // inertia poisons the solver the first time anything touches it.
-      if (isDynamic) {
-        Matter.Body.setMass(body, Math.max(entity.collider.mass, 0.001));
-        Matter.Body.setVelocity(body, {
-          x: toMatterVelocity(entity.motion.velocity.x),
-          y: toMatterVelocity(entity.motion.velocity.y)
-        });
-      }
-
-      Matter.Composite.add(this.engine.world, body);
-      this.bodies.set(entity.id, body);
+      this.createBody(entity);
     }
+  }
+
+  private createBody(entity: Entity): void {
+    const isDynamic = !entity.collider.fixed;
+    const body = Matter.Bodies.circle(
+      entity.transform.position.x,
+      entity.transform.position.y,
+      entity.collider.radius,
+      {
+        isStatic: !isDynamic,
+        friction: 0,
+        frictionAir: 0,
+        restitution: 0.6,
+        label: `entity:${entity.id}`
+      }
+    );
+
+    // Only dynamic bodies get an explicit mass. A static body carries infinite mass by
+    // design, and `Body.setMass` on it divides Infinity by Infinity: the resulting NaN
+    // inertia poisons the solver the first time anything touches it.
+    if (isDynamic) {
+      Matter.Body.setMass(body, Math.max(entity.collider.mass, 0.001));
+      Matter.Body.setVelocity(body, {
+        x: toMatterVelocity(entity.motion.velocity.x),
+        y: toMatterVelocity(entity.motion.velocity.y)
+      });
+    }
+
+    Matter.Composite.add(this.engine.world, body);
+    this.bodies.set(entity.id, body);
   }
 
   /** Advances Matter by exactly one fixed step. */
@@ -143,6 +165,13 @@ export class PhysicsAdapter {
   /** Copies Matter's resolved motion back into the authoritative world. */
   writeBack(world: World): void {
     for (const entity of world.all()) {
+      // A kinematic mover owns its own transform and velocity: it is in the physics world
+      // only so other bodies can be pushed aside by it, never so the solver can move it.
+      // Writing back here would overwrite the position the projectile integrator just
+      // computed with the static body's frozen one.
+      if (entity.projectile) {
+        continue;
+      }
       const body = this.bodies.get(entity.id);
       if (!body) {
         continue;

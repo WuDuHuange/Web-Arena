@@ -166,6 +166,13 @@ function applyActiveFrame(
     if (candidate.faction === self.faction) {
       continue;
     }
+    // Field objects are scenery, not combatants. A unit must not be able to destroy the
+    // lava it is standing in, and an emitter lashed to a wall should not be killable by
+    // the side it is shooting at. Mechanisms have their own removal rules (`spent`,
+    // `consumed`); health is not one of them.
+    if (candidate.behavior) {
+      continue;
+    }
 
     const inside = hitsTarget(
       ability.geometry,

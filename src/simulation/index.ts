@@ -20,6 +20,21 @@ export type { CircleTarget } from "./geometry.ts";
 export { edgeDistance, findNearestTarget, isHostile, resolveFacing, resolveMovementIntent } from "./ai.ts";
 export { createRng } from "./rng.ts";
 export type { Rng } from "./rng.ts";
+export {
+  blast,
+  chainTargets,
+  mechanismAffects,
+  overlapsMechanism,
+  segmentHitsCircle,
+  stepMechanisms,
+  stepProjectiles
+} from "./mechanisms.ts";
+export type {
+  MechanismDamage,
+  MechanismTickResult,
+  ProjectileRequest,
+  VelocityOverlay
+} from "./mechanisms.ts";
 export { GREYBOX_BOUNDS, createWorldFromSetup, greyboxSetup } from "./spawn.ts";
 export {
   PRESSURE_BOUNDS,
@@ -43,8 +58,12 @@ export type {
   EntityKind,
   Faction,
   Health,
+  Mechanism,
   Motion,
   MutableVec2,
+  Projectile,
+  PropBehavior,
+  PropTrigger,
   RenderRef,
   SpawnDef,
   Transform,

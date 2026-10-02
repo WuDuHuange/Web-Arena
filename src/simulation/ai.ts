@@ -38,6 +38,17 @@ export function findNearestTarget(self: Entity, candidates: readonly Entity[]): 
     if (candidate.id === self.id) {
       continue;
     }
+    // Field objects are not targets. Without this a unit whose nearest "enemy" was a neutral
+    // turret would march at it, stop at its edge and swing forever, which reads as a unit
+    // that has simply stopped fighting.
+    if (candidate.behavior) {
+      continue;
+    }
+    // A projectile is not a target either: it is on the field for a fraction of a second and
+    // chasing it would just make a unit twitch.
+    if (candidate.projectile) {
+      continue;
+    }
 
     const dx = candidate.transform.position.x - self.transform.position.x;
     const dy = candidate.transform.position.y - self.transform.position.y;

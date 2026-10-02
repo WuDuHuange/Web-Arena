@@ -115,6 +115,104 @@ export function validateContent(library: ContentLibrary): ValidationResult {
       continue;
     }
     propIds.add(prop.id);
+
+    const behavior = prop.behavior;
+
+    if (!(behavior.radius > 0)) {
+      issues.push({ path: `props.${prop.id}.behavior.radius`, message: "radius must be positive" });
+    }
+    if (behavior.damage < 0) {
+      issues.push({ path: `props.${prop.id}.behavior.damage`, message: "damage must not be negative" });
+    }
+
+    // A continuous source with damage but no interval deals its damage every single tick,
+    // which is 60x the intended rate and turns lava into an instant kill.
+    if (behavior.damage > 0 && behavior.kind === "aura" && behavior.intervalTicks <= 0) {
+      issues.push({
+        path: `props.${prop.id}.behavior.intervalTicks`,
+        message: "a damaging aura needs a positive intervalTicks, or it deals damage every tick"
+      });
+    }
+    if (behavior.intervalTicks < 0) {
+      issues.push({
+        path: `props.${prop.id}.behavior.intervalTicks`,
+        message: "intervalTicks must not be negative"
+      });
+    }
+    if (behavior.cooldownTicks < 0) {
+      issues.push({
+        path: `props.${prop.id}.behavior.cooldownTicks`,
+        message: "cooldownTicks must not be negative"
+      });
+    }
+
+    // A trigger with no reach reacts to nothing: it overlaps only its own body, so a unit
+    // would have to be inside the prop's collider to set it off. That is possible but not
+    // what "you stepped on it" means, so it is treated as an authoring mistake.
+    if (behavior.kind === "spike" && behavior.reach <= 0) {
+      issues.push({
+        path: `props.${prop.id}.behavior.reach`,
+        message: "a spike needs a positive reach, or nothing can ever trigger it"
+      });
+    }
+
+    if (behavior.kind === "spring" && behavior.force <= 0) {
+      issues.push({
+        path: `props.${prop.id}.behavior.force`,
+        message: "a spring with no force does nothing"
+      });
+    }
+
+    if (behavior.kind === "explosive") {
+      if (behavior.reach <= 0) {
+        issues.push({
+          path: `props.${prop.id}.behavior.reach`,
+          message: "an explosive needs a positive reach to have a blast at all"
+        });
+      }
+      // Chaining further than the blast itself cannot be triggered by this blast, so the
+      // value is either a typo or dead data. Reported rather than silently ignored.
+      if ((behavior.chainRadius ?? 0) > behavior.reach) {
+        issues.push({
+          path: `props.${prop.id}.behavior.chainRadius`,
+          message: "chainRadius must not exceed reach, or a blast cannot trigger what it targets"
+        });
+      }
+    }
+
+    if (behavior.kind === "conveyor" && behavior.force <= 0) {
+      issues.push({
+        path: `props.${prop.id}.behavior.force`,
+        message: "a conveyor with no force does not convey"
+      });
+    }
+
+    if (behavior.kind === "turret" || behavior.kind === "shrine") {
+      if (!(behavior.projectileSpeed ?? 0 > 0)) {
+        issues.push({
+          path: `props.${prop.id}.behavior.projectileSpeed`,
+          message: "an emitter needs a positive projectileSpeed"
+        });
+      }
+      if (behavior.reach <= 0) {
+        issues.push({
+          path: `props.${prop.id}.behavior.reach`,
+          message: "an emitter with no reach never finds anything to shoot at"
+        });
+      }
+      if (behavior.intervalTicks <= 0) {
+        issues.push({
+          path: `props.${prop.id}.behavior.intervalTicks`,
+          message: "an emitter needs a positive intervalTicks to have a firing cadence"
+        });
+      }
+      if (behavior.affects === "none") {
+        issues.push({
+          path: `props.${prop.id}.behavior.affects`,
+          message: "an emitter that affects nothing fires for no reason"
+        });
+      }
+    }
   }
 
   return { ok: issues.length === 0, issues };

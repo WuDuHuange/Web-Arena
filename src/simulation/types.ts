@@ -106,6 +106,21 @@ export interface Entity {
   render: RenderRef;
   /** Absent on anything that cannot fight: props, and later, plain projectiles. */
   combat?: Combat;
+  /**
+   * Present on field objects that do something when stepped on or when time passes.
+   *
+   * A prop with behaviour and no `mechanism` would be a trigger that never fires, which
+   * is exactly the silent failure Phase 3 exists to rule out, so the two travel together.
+   */
+  behavior?: PropBehavior;
+  mechanism?: Mechanism;
+  /** Present on anything an emitter fired. */
+  projectile?: Projectile;
+  /**
+   * Present on anything without an AI that still needs to keep moving: projectiles, and
+   * anything a spring or a blast has thrown. See `PersistentVelocity`.
+   */
+  persistentVelocity?: PersistentVelocity;
 }
 
 /**
@@ -166,10 +181,104 @@ export interface AbilitySpec {
   readonly turnToTarget: number;
 }
 
+/**
+ * How a field object behaves. Purely data: the behaviour system switches on `kind` and
+ * reads the numbers it needs, so adding a variant is a config change.
+ *
+ * The field is deliberately flat rather than a discriminated union. A union would be
+ * type-safer, but it would also force the content library to carry the full shape of
+ * every variant it is not using, and the validator — not the type system — is what
+ * actually guards authored data. One optional-laden record keeps the library readable.
+ */
+export interface PropBehavior {
+  readonly kind: PropTrigger;
+  /** Radius of the effect, in world units. For a solid prop this is the body itself. */
+  readonly radius: number;
+  /** Damage per application. Zero for anything harmless. */
+  readonly damage: number;
+  /**
+   * Ticks between damage applications.
+   *
+   * This is the field-object equivalent of the combat `applied` guard. A `stepCombat`
+   * active window needs one flag because it lasts a few ticks; an aura lasts forever, so
+   * it needs an explicit cadence instead. Without it, standing in lava for one second
+   * deals 60 applications.
+   */
+  readonly intervalTicks: number;
+  /** Ticks a triggered mechanism stays spent before it can fire again. */
+  readonly cooldownTicks: number;
+  /** Speed applied, in world units per second. Push strength for springs and blasts. */
+  readonly force: number;
+  /** Heading the force is applied along. Falls back to the prop's own facing. */
+  readonly forceFacing?: number;
+  /** Reach of an emitter's projectile, or of a trigger's proximity check. */
+  readonly reach: number;
+  /** Speed of an emitted projectile, in world units per second. */
+  readonly projectileSpeed?: number;
+  /** How far a blast or a projectile can chain to another mechanism. */
+  readonly chainRadius?: number;
+  /** Only substances that hurt are hostile; a conveyor cares about nobody's faction. */
+  readonly affects: "all" | "hostile" | "none";
+}
+
+/** Field-object mechanism families. Mirrors the content layer's trigger vocabulary. */
+export type PropTrigger =
+  | "aura"
+  | "conveyor"
+  | "spring"
+  | "explosive"
+  | "spike"
+  | "turret"
+  | "shrine";
+
+/** Ticks until a projectile expires. See `Projectile`. */
+export interface Projectile {
+  /** Damage on impact. */
+  readonly damage: number;
+  /** Ticks of life remaining. Counts down; a shot that reaches zero is removed. */
+  ticksLeft: number;
+  /** The mechanism that fired it, for attribution in diagnostics. */
+  readonly sourceId: number;
+}
+
+/**
+ * A velocity the entity carries itself, independent of any AI.
+ *
+ * `Motion.velocity` is the resolved value the physics engine actually integrates, and it is
+ * rewritten from scratch every tick. That means an entity with no AI — a projectile, or a
+ * unit standing on a spring — would have its velocity reset to zero on the very next tick
+ * and stop dead the instant after it was launched.
+ *
+ * This is the base those entities are rebuilt from. It exists so an impulse survives more
+ * than one tick without the overlay that produced it being re-applied, which is the
+ * difference between a launch and an infinite thrust.
+ */
+export interface PersistentVelocity {
+  x: number;
+  y: number;
+}
+
 /** Read-only projection of the world, safe to hand to the renderer or diagnostics. */
 export interface WorldSnapshot {
   readonly tick: number;
   readonly entities: readonly Entity[];
+}
+
+/**
+ * Runtime state for a mechanism.
+ *
+ * Kept separate from `PropBehavior` because behaviour is authored content and this is
+ * simulation state: resetting a battle must rebuild one and not touch the other.
+ */
+export interface Mechanism {
+  /** Ticks until this mechanism may fire again. Counts down, clamped at zero. */
+  cooldownTicksLeft: number;
+  /** Ticks until the next periodic application, for continuous sources. */
+  intervalTicksLeft: number;
+  /** Set once a one-shot mechanism has fired and cannot fire again. */
+  spent?: boolean;
+  /** Set while a trigger is currently overlapping something it already reacted to. */
+  latched?: boolean;
 }
 
 /** One placement entry of a deployment. */
@@ -193,6 +302,11 @@ export interface SpawnDef {
    * built from that character's ability list. Absent means a non-combatant.
    */
   readonly characterId?: string;
+  /**
+   * Mechanism this prop carries. Same reasoning as `characterId`: passed in rather than
+   * looked up, so the core needs no content registry and a test can hand it a stub.
+   */
+  readonly behavior?: PropBehavior;
 }
 
 /** Immutable starting point of a battle. Resetting restores exactly this. */
