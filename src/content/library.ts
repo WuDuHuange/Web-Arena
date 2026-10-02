@@ -203,7 +203,16 @@ export const CHARACTER_LIBRARY: readonly CharacterDef[] = [
     name: "赤刃",
     abilityIds: ["ability.blade.strike"],
     cost: 2,
-    appearance: "red-blade",
+    // The one character whose key resolves to art rather than to the grey box.
+    //
+    // It is `demo-sequence`, a fixture generated at runtime from a canvas, and it is here so
+    // that the appearance pipeline's *success* path is executed by every run of the app
+    // instead of being a branch nobody has ever seen work. An adapter that only ever
+    // exercises its failure path is an adapter that breaks the day the first real asset
+    // arrives. Put the real key here when the art phase starts, and delete the fixture from
+    // `appearance.ts` in the same commit — a test asserts this reference exists, so the
+    // fixture cannot be left behind as an entry nothing draws.
+    appearance: "demo-sequence",
     radius: 13,
     mass: 1.1,
     hp: 90,

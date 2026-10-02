@@ -328,6 +328,48 @@ button:disabled {
   color: var(--muted);
 }
 
+/* --- Appearance load state ---------------------------------------------- */
+
+/* A row rather than the stacked default, because a key, its state and its failure reason
+   are read as one line: "this key, in this state, because of this". The selector has to
+   out-specify `.panel__appearances li`, which sets the column direction. */
+.panel__appearances li.panel__appearance-row {
+  flex-direction: row;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.appearance__state {
+  flex: none;
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 0 6px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+}
+
+/* The three states get three colours, because the panel is the only place the difference
+   between "no art" and "art that did not load" can be read in words. */
+.appearance__state--ready {
+  color: #2f7a4a;
+}
+
+.appearance__state--pending {
+  color: #a3541c;
+}
+
+.appearance__state--failed {
+  color: #b3352a;
+}
+
+.appearance__reason {
+  font-size: 11px;
+  color: var(--muted);
+  /* Loader errors are file paths and URLs; they must wrap rather than stretch the panel. */
+  word-break: break-all;
+}
+
 .panel__note--future {
   margin-top: 10px;
   padding-top: 10px;

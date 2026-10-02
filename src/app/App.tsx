@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CONTENT_LIBRARY, TAG_LABELS } from "../content/library.ts";
+import {
+  APPEARANCE_REGISTRY,
+  findAppearanceProblems,
+  overrideAppearance
+} from "../content/appearance.ts";
+import type { AppearanceEntry } from "../content/appearance.ts";
+import { CONTENT_LIBRARY, PROP_LIBRARY, TAG_LABELS } from "../content/library.ts";
 import { validateContent } from "../content/validate.ts";
 import {
   DRAFT_CATALOG,
@@ -31,6 +37,7 @@ import { parseDeployment, summariseDeployment } from "../persistence/deployment-
 import type { DeploymentSummary } from "../persistence/deployment-io.ts";
 import { createBattlefield } from "../render/battlefield.ts";
 import type { Battlefield } from "../render/battlefield.ts";
+import type { AppearanceReportRow } from "../render/atlas.ts";
 import type { PlacementMarker } from "../render/placement.ts";
 import { createCueDetector } from "../audio/detect.ts";
 import type { CueDetector } from "../audio/detect.ts";
@@ -51,6 +58,23 @@ import { HelpOverlay } from "./HelpOverlay.tsx";
  * panel render it on the very first paint.
  */
 const VALIDATION = validateContent(CONTENT_LIBRARY);
+
+/**
+ * Registry self-check, run once at module load for the same reason the library validation is.
+ *
+ * Reported separately from `VALIDATION` rather than folded into it: `VALIDATION` answers "can
+ * this content be fought", and this answers "can this content be *drawn*. Folding them would
+ * make one boolean stand for two questions, and the panel would then have no way to say which
+ * one failed.
+ */
+const APPEARANCE_PROBLEMS = findAppearanceProblems();
+
+/** Panel wording for the three load states. */
+const APPEARANCE_STATE_LABEL: Record<AppearanceReportRow["state"], string> = {
+  pending: "加载中",
+  ready: "已就绪",
+  failed: "加载失败"
+};
 
 /** Marks the help overlay as read, so it only auto-opens once. */
 const HELP_SEEN_KEY = "project-arena.help.seen.v1";
@@ -183,6 +207,13 @@ export function App() {
   const [importSummary, setImportSummary] = useState<DeploymentSummary | null>(null);
   /** Flips once the WebGL battlefield exists, so effects can wait for it. */
   const [battlefieldReady, setBattlefieldReady] = useState(false);
+  /**
+   * Live appearance state, read back from the renderer's own atlas.
+   *
+   * Deliberately not a second source of truth: the panel asks the battlefield what it is
+   * drawing with, so a report of "已就绪" and a grey box on screen cannot both be true.
+   */
+  const [appearance, setAppearance] = useState<readonly AppearanceReportRow[]>([]);
   const [readout, setReadout] = useState<Readout>({
     tick: 0,
     entities: 0,
@@ -207,6 +238,20 @@ export function App() {
   const errors = useMemo(() => issues.filter((issue) => issue.level === "error"), [issues]);
   const readiness = useMemo(() => draftReadiness(draft), [draft]);
   const canStart = readiness.ready && errors.length === 0;
+  const appearanceTally = useMemo(
+    () => ({
+      ready: appearance.filter((row) => row.state === "ready").length,
+      pending: appearance.filter((row) => row.state === "pending").length,
+      failed: appearance.filter((row) => row.state === "failed").length
+    }),
+    [appearance]
+  );
+  /**
+   * Read from the registry rather than from the report, so "no keys registered" and "the
+   * renderer has not reported yet" stay distinguishable. They both render as zero rows and
+   * mean opposite things.
+   */
+  const registryKeyCount = Object.keys(APPEARANCE_REGISTRY).length;
 
   /**
    * Builds the battle the current draft describes.
@@ -361,7 +406,41 @@ export function App() {
       if (simulation) {
         setReadout(readSummary(simulation));
       }
+      setAppearance(battlefieldRef.current?.appearance() ?? []);
     }, 250);
+
+    /**
+     * Debug hook for `scripts/verify-appearance.mjs`, installed only under `?debug=1`.
+     *
+     * The three appearance states are decided in a pure function that the head-less tests
+     * cover completely, and what they cannot cover is the last step: whether the pixels on
+     * the canvas actually differ between them. That is the assertion this hook exists to
+     * make possible — point a real key at a file that is not there, and require the failure
+     * to be visible. Gated rather than always-on, because a shipped page should not carry a
+     * handle that lets anything on it rewrite the asset table.
+     */
+    const debug = new URLSearchParams(window.location.search).get("debug") === "1";
+    if (debug) {
+      (window as unknown as { __arenaAppearance?: unknown }).__arenaAppearance = {
+        registry: (): unknown => JSON.parse(JSON.stringify(APPEARANCE_REGISTRY)),
+        override: (key: string, entry: AppearanceEntry | null): void => overrideAppearance(key, entry),
+        report: (): readonly AppearanceReportRow[] => battlefieldRef.current?.appearance() ?? [],
+        // Where each unit is and which key it draws with, so the smoke test can say *which*
+        // unit it is looking at rather than hard-coding arena coordinates that a scene edit
+        // would silently invalidate.
+        units: (): readonly unknown[] =>
+          simulationRef.current
+            ?.snapshot()
+            .entities.filter((entity) => !entity.behavior && !entity.projectile)
+            .map((entity) => ({
+              id: entity.id,
+              appearance: entity.render.appearance,
+              x: entity.transform.position.x,
+              y: entity.transform.position.y,
+              radius: entity.collider.radius
+            })) ?? []
+      };
+    }
 
     return () => {
       disposed = true;
@@ -372,6 +451,9 @@ export function App() {
       audioRef.current = null;
       cuesRef.current = null;
       delete (window as unknown as { __arenaBench?: unknown }).__arenaBench;
+      if (debug) {
+        delete (window as unknown as { __arenaAppearance?: unknown }).__arenaAppearance;
+      }
     };
   }, [applyPhase]);
 
@@ -888,11 +970,64 @@ export function App() {
             props={CONTENT_LIBRARY.props.length}
           />
 
+          <section className="panel__block">
+            <h2>外观</h2>
+            {APPEARANCE_PROBLEMS.length > 0 ? (
+              <ul className="panel__issues">
+                {APPEARANCE_PROBLEMS.map((problem, index) => (
+                  <li key={index}>
+                    <span>{problem}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+
+            {registryKeyCount === 0 ? (
+              // Distinguished from "the battlefield is not up yet": both show no rows, and
+              // they mean opposite things — one is a normal empty registry, the other is a
+              // renderer that has not started.
+              <p className="panel__note">注册表为空：当前全部图形由程序绘制，没有需要加载的素材。</p>
+            ) : appearance.length === 0 ? (
+              <p className="panel__note">外观层尚未就绪（战场还没建起来）。</p>
+            ) : (
+              <>
+                <p className={appearanceTally.failed > 0 ? "panel__alert" : "panel__ok"}>
+                  <span
+                    className={`panel__dot panel__dot--${appearanceTally.failed > 0 ? "warn" : "ok"}`}
+                  />
+                  注册表 {appearance.length} 键 · 就绪 {appearanceTally.ready} · 加载中{" "}
+                  {appearanceTally.pending} · 失败 {appearanceTally.failed}
+                </p>
+                <ul className="panel__appearances">
+                  {appearance.map((row) => (
+                    <li key={row.key} className="panel__appearance-row">
+                      <code>{row.key}</code>
+                      <span className={`appearance__state appearance__state--${row.state}`}>
+                        {APPEARANCE_STATE_LABEL[row.state]}
+                      </span>
+                      {row.reason ? <span className="appearance__reason">{row.reason}</span> : null}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+
+            {/* The three states are spelled out because the difference between them is the
+                whole contract, and it is not visible in a screenshot: "no art" and "art that
+                failed to load" only look different because the renderer makes them differ. */}
+            <p className="panel__note">
+              键不在注册表里 = 没有素材，程序绘制，这是正常状态。表里有键但图没出来 =
+              加载中或加载失败，战场上画成洋红虚线框——与程序绘制的圆身一眼可分，不会静默降级成「看起来正常的灰盒」。
+              注册表在 <code>src/content/appearance.ts</code>。
+            </p>
+          </section>
+
           <CreditsPanel />
 
           <p className="panel__note">
-            近战、扇形、穿透直线与圆形范围已接入；七类机关（熔岩、传送带、弹簧、炸药桶、地刺、炮台、祭坛）可仿真，表现与音效均为程序生成。Tag 与 Buff
-            由能力表解释，布阵可在战场上直接拖拽编辑。
+            近战、扇形、穿透直线与圆形范围已接入；{PROP_LIBRARY.length} 类机关（
+            {PROP_LIBRARY.map((prop) => prop.name).join("、")}
+            ）可仿真，表现与音效均为程序生成。Tag 与 Buff 由能力表解释，布阵可在战场上直接拖拽编辑。
           </p>
         </aside>
       </main>

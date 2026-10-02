@@ -1,3 +1,5 @@
+import { APPEARANCE_REGISTRY, findAppearanceProblems } from "./appearance.ts";
+import type { AppearanceEntry } from "./appearance.ts";
 import type { ContentLibrary } from "./schema.ts";
 
 export interface ValidationIssue {
@@ -24,8 +26,15 @@ export interface ValidationResult {
  * the attack still deals damage and only the effect is missing. Both look like a unit that
  * is broken in a way nobody can point at, which is exactly what this function exists to
  * turn into a message.
+ *
+ * The appearance registry is checked here too, for the same reason and in the same spirit:
+ * a sequence whose `frameCount` is zero slices a zero-width texture rectangle, so the unit
+ * draws nothing at all. No error, no sprite, and the only symptom is a unit that is missing.
  */
-export function validateContent(library: ContentLibrary): ValidationResult {
+export function validateContent(
+  library: ContentLibrary,
+  registry: Readonly<Record<string, AppearanceEntry>> = APPEARANCE_REGISTRY
+): ValidationResult {
   const issues: ValidationIssue[] = [];
 
   // Buffs are checked first: the ability pass below needs the full set of valid ids to
@@ -304,6 +313,14 @@ export function validateContent(library: ContentLibrary): ValidationResult {
         });
       }
     }
+  }
+
+  // Last, and against its own argument rather than the library: the registry is a separate
+  // constant, and the problems it can have are intrinsic to an entry rather than to how the
+  // library references it. Appended rather than interleaved so the messages a reader already
+  // knows stay in the order they were in.
+  for (const problem of findAppearanceProblems(registry)) {
+    issues.push({ path: "appearance", message: problem });
   }
 
   return { ok: issues.length === 0, issues };

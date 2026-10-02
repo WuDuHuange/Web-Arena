@@ -1,6 +1,11 @@
-import { Application, Container, Graphics, Point } from "pixi.js";
+import { Application, Container, Graphics, Point, Sprite } from "pixi.js";
+import { planAppearance, phaseOffsetMs } from "../content/appearance.ts";
+import type { DrawPlan } from "../content/appearance.ts";
 import type { Entity, WorldSnapshot } from "../simulation/types.ts";
+import { createAppearanceAtlas } from "./atlas.ts";
+import type { AppearanceReportRow } from "./atlas.ts";
 import { factionColor } from "./palette.ts";
+import { drawAppearancePlaceholder } from "./placeholder.ts";
 import { drawPlacementMarkers } from "./placement.ts";
 import type { PlacementMarker } from "./placement.ts";
 import { drawProp, drawProjectile } from "./props.ts";
@@ -40,6 +45,14 @@ export interface Battlefield {
   render(snapshot: WorldSnapshot, alpha: number, elapsedMs?: number): void;
   /** Replaces the editor decorations drawn over the battlefield. */
   setMarkers(markers: readonly PlacementMarker[]): void;
+  /**
+   * The live state of every appearance key, for the asset panel.
+   *
+   * Exposed through the battlefield rather than handed to the app as a second object, so
+   * there is exactly one atlas and the panel cannot report on a different one from the one
+   * the renderer is drawing with.
+   */
+  appearance(): readonly AppearanceReportRow[];
   /** Installs pointer callbacks, or `null` to ignore pointer input. */
   setPointerHandlers(handlers: PointerHandlers | null): void;
   /**
@@ -59,15 +72,29 @@ interface ScreenPoint {
   y: number;
 }
 
-/** Per-entity drawable, kept as one Graphics so a unit is a single draw call. */
+/** Per-entity drawable: the procedural body plus, when a key resolves to art, a bitmap. */
 interface UnitSprite {
+  /** Body, facing marker and health bar. Everything the renderer computes. */
   readonly gfx: Graphics;
+  /**
+   * The bitmap, when there is one.
+   *
+   * A child of the same container and added *before* `gfx`, so the facing marker and the
+   * health bar stay legible on top of the art. Those two are the only things on screen that
+   * carry information a static image cannot: which way the unit is pointing, and how much
+   * health it has left.
+   */
+  readonly view: Sprite;
+  /** Which texture `view` currently holds, so an unchanged frame is not re-assigned. */
+  textureKey: string;
 }
 
 const HEALTH_BAR_WIDTH = 26;
 const HEALTH_BAR_HEIGHT = 3;
 const HEALTH_BAR_OFFSET = 7;
 const DEAD_COLOR = 0x2a2f3a;
+/** Tint for a bitmap of a dead unit. Multiplied into the art, so it reads as the same shape gone grey. */
+const DEAD_TINT = 0x6a7080;
 
 /**
  * PixiJS battlefield.
@@ -109,6 +136,17 @@ export async function createBattlefield(host: HTMLElement, bounds: BattlefieldBo
 
   const markerGfx = new Graphics();
   markerLayer.addChild(markerGfx);
+
+  /**
+   * The appearance layer's impure half.
+   *
+   * Started here rather than awaited: a battlefield that waits for every sprite sheet before
+   * its first frame is a battlefield that stays black while the art loads, and the whole
+   * point of the three-state decision is that "still loading" is something the screen can
+   * show. `ensure` in the render loop covers anything `preload` did not name.
+   */
+  const atlas = createAppearanceAtlas();
+  void atlas.preload();
 
   const sprites = new Map<number, UnitSprite>();
   const previous = new Map<number, ScreenPoint>();
@@ -216,6 +254,77 @@ export async function createBattlefield(host: HTMLElement, bounds: BattlefieldBo
     return unitLayer;
   };
 
+  /**
+   * Draws one unit: its art if it has any, otherwise the grey box.
+   *
+   * The three outcomes are kept visibly distinct on purpose, because that is the whole
+   * contract. `procedural` means no art was authored and the grey box is the intended
+   * rendering. `art` means a bitmap was authored and loaded. `placeholder` means a bitmap was
+   * authored and is *not* drawable — loading, or failed — and it must not be possible to
+   * confuse that with the first case, or a broken asset ships looking like a finished one.
+   */
+  const drawUnit = (sprite: UnitSprite, entity: Entity, x: number, y: number, elapsedMs: number): void => {
+    const plan: DrawPlan = planAppearance(
+      entity.render.appearance,
+      entity.combat?.phase === "windup",
+      // Staggered by id so a rank of identical units does not animate in lockstep. The id is
+      // the only per-entity number available here that is not part of the simulation state.
+      elapsedMs + phaseOffsetMs(entity.id),
+      atlas.status
+    );
+
+    if (plan.kind === "placeholder") {
+      // Asked for again on every frame rather than only at startup. A source that is not in
+      // the registry's list — because the entry was added later, or by the debug override —
+      // would otherwise sit at "加载中" with nothing ever starting the load.
+      atlas.ensure(plan.source);
+    }
+
+    if (plan.kind === "art") {
+      const texture =
+        plan.spec.kind === "sequence"
+          ? atlas.frame(plan.spec.source, plan.frame, plan.spec.frameWidth, plan.spec.frameHeight)
+          : atlas.texture(plan.spec.source);
+
+      if (texture) {
+        const textureKey = `${plan.spec.source}#${plan.frame}`;
+        if (sprite.textureKey !== textureKey) {
+          sprite.view.texture = texture;
+          sprite.textureKey = textureKey;
+        }
+        sprite.view.position.set(x, y);
+        sprite.view.visible = true;
+
+        // A dead unit keeps its sprite and goes grey, exactly as the grey box does. Dropping
+        // the art instead would make a corpse pop back to a procedural circle.
+        const dying = entity.health.dead === true;
+        sprite.view.tint = dying ? DEAD_TINT : 0xffffff;
+        sprite.view.alpha = dying ? 0.45 : 1;
+
+        // Art replaces the body and nothing else. The marker and the bar are drawn on top.
+        sprite.gfx.clear();
+        drawChrome(sprite.gfx, entity, x, y);
+        return;
+      }
+      // `ready` with no texture is a wiring bug, and the one thing it must not do is fall
+      // through to the grey box, which would hide it.
+      sprite.view.visible = false;
+      drawAppearancePlaceholder(sprite.gfx, x, y, entity.collider.radius);
+      drawChrome(sprite.gfx, entity, x, y);
+      return;
+    }
+
+    sprite.view.visible = false;
+
+    if (plan.kind === "placeholder") {
+      drawAppearancePlaceholder(sprite.gfx, x, y, entity.collider.radius);
+      drawChrome(sprite.gfx, entity, x, y);
+      return;
+    }
+
+    drawEntity(sprite.gfx, entity, x, y);
+  };
+
   return {
     render(snapshot: WorldSnapshot, alpha: number, elapsedMs = 0): void {
       const seen = new Set<number>();
@@ -226,9 +335,14 @@ export async function createBattlefield(host: HTMLElement, bounds: BattlefieldBo
 
         let sprite = sprites.get(entity.id);
         if (!sprite) {
-          sprite = { gfx: new Graphics() };
+          const view = new Sprite();
+          view.anchor.set(0.5);
+          view.visible = false;
+          const gfx = new Graphics();
+          sprite = { gfx, view, textureKey: "" };
           sprites.set(entity.id, sprite);
-          layerFor(entity).addChild(sprite.gfx);
+          // View under graphics, so the facing marker and health bar stay on top of art.
+          layerFor(entity).addChild(view, gfx);
         }
 
         const target = entity.transform.position;
@@ -237,17 +351,31 @@ export async function createBattlefield(host: HTMLElement, bounds: BattlefieldBo
         const y = last ? last.y + (target.y - last.y) * alpha : target.y;
 
         if (entity.behavior) {
+          // Props deliberately do not go through the appearance layer, and the reason is not
+          // that it was easier. A prop's drawing *is* its mechanic readout: the translucent
+          // field is the effect radius, the inner disc is the collider, and the pulse is the
+          // cadence counter the damage tick actually reads. Substituting a bitmap would delete
+          // gameplay information rather than change a costume. When prop art arrives it has to
+          // be composited with the procedural field, which is a design task, not a lookup —
+          // and `tests/appearance.test.mjs` fails the moment a prop key gets registered before
+          // that work is done.
           drawProp(sprite.gfx, entity, x, y, seconds);
+          sprite.view.visible = false;
         } else if (entity.projectile) {
+          // Same reasoning: an emitter's shot is a bright dot whose size is its hitbox.
           drawProjectile(sprite.gfx, entity, x, y);
+          sprite.view.visible = false;
         } else {
-          drawEntity(sprite.gfx, entity, x, y);
+          drawUnit(sprite, entity, x, y, elapsedMs);
         }
       }
 
       for (const [id, sprite] of sprites) {
         if (!seen.has(id)) {
           sprite.gfx.destroy();
+          // `texture: false` — the atlas owns every texture here, and a sprite that freed its
+          // own would leave the cache handing out a destroyed handle to the next unit.
+          sprite.view.destroy({ texture: false, textureSource: false });
           sprites.delete(id);
           previous.delete(id);
         }
@@ -266,6 +394,10 @@ export async function createBattlefield(host: HTMLElement, bounds: BattlefieldBo
       markers = next;
     },
 
+    appearance(): readonly AppearanceReportRow[] {
+      return atlas.report();
+    },
+
     setPointerHandlers(next: PointerHandlers | null): void {
       handlers = next;
       canvas.style.cursor = next ? "crosshair" : "default";
@@ -282,34 +414,56 @@ export async function createBattlefield(host: HTMLElement, bounds: BattlefieldBo
       canvas.removeEventListener("pointerup", onPointerUp);
       canvas.removeEventListener("pointercancel", onPointerUp);
       handlers = null;
+      atlas.destroy();
       app.destroy(true, { children: true });
     }
   };
 }
 
 /**
- * Draws one entity: body, facing marker, and a health bar when it can fight.
+ * Draws one entity as a grey box: body, facing marker, and a health bar when it can fight.
  *
  * Everything is redrawn from scratch each frame. With a few hundred entities this is
  * still comfortably within budget, and it avoids a cache-invalidation bug class that is
  * far more expensive to debug than the fill rate it saves.
+ *
+ * Used only when a key resolves to `procedural`. When it resolves to art, the body is the
+ * bitmap and `drawChrome` is called on its own — the two halves are split for exactly that
+ * reason, so a unit with a sprite still shows its heading and its remaining health.
  */
 function drawEntity(gfx: Graphics, entity: Entity, x: number, y: number): void {
   gfx.clear();
+  drawBody(gfx, entity, x, y);
+  drawChrome(gfx, entity, x, y);
+}
 
+/** The grey-box body: a filled circle in the faction colour, desaturated once it is dead. */
+function drawBody(gfx: Graphics, entity: Entity, x: number, y: number): void {
   const radius = entity.collider.radius;
-  const base = factionColor(entity.faction);
-
   // Dead bodies are drawn desaturated rather than skipped, so a body visibly stops
   // fighting instead of silently vanishing mid-frame.
   const dying = entity.health.dead === true;
-  const fill = dying ? DEAD_COLOR : base;
 
   gfx.circle(x, y, radius);
-  gfx.fill(fill);
+  gfx.fill(dying ? DEAD_COLOR : factionColor(entity.faction));
   gfx.stroke({ width: 2, color: 0x0a0d14 });
+}
 
-  if (entity.combat && !dying) {
+/**
+ * Facing marker and health bar — the two things a bitmap cannot carry.
+ *
+ * Assumes the caller has already cleared the graphics, because the caller may have put a
+ * placeholder or a sprite there instead of a body.
+ */
+function drawChrome(gfx: Graphics, entity: Entity, x: number, y: number): void {
+  if (!entity.combat) {
+    return;
+  }
+
+  const radius = entity.collider.radius;
+  const dying = entity.health.dead === true;
+
+  if (!dying) {
     // Facing marker: a short spike from the edge, brightened while winding up so the
     // telegraph is visible and the attack direction is unambiguous.
     const casting = entity.combat.phase === "windup";
@@ -320,11 +474,9 @@ function drawEntity(gfx: Graphics, entity: Entity, x: number, y: number): void {
     gfx.moveTo(x + Math.cos(entity.transform.facing) * inner, y + Math.sin(entity.transform.facing) * inner);
     gfx.lineTo(x + Math.cos(entity.transform.facing) * outer, y + Math.sin(entity.transform.facing) * outer);
     gfx.stroke({ width: casting ? 3 : 2, color: markerColor });
-
-    drawHealthBar(gfx, entity, x, y, radius);
-  } else if (entity.combat && dying) {
-    drawHealthBar(gfx, entity, x, y, radius);
   }
+
+  drawHealthBar(gfx, entity, x, y, radius);
 }
 
 function drawHealthBar(gfx: Graphics, entity: Entity, x: number, y: number, radius: number): void {

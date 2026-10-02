@@ -74,6 +74,14 @@ export function CreditsPanel() {
         引入外部素材时，每个外观键都必须在 <code>src/content/credits.ts</code> 登记：
         来源链接、作者、授权协议、获取日期。缺任何一项都不算核验完成。
       </p>
+
+      {/* Without this line the list above reads as a to-do, and the one key on it that is
+          already settled looks like the most urgent item. A `builtin:` source is drawn into
+          an offscreen canvas at startup: it ships no bytes and has no author to credit. */}
+      <p className="panel__note">
+        <code>builtin:</code> 开头的来源是运行时用画布合成的临时占位，不落盘、不含第三方内容，因此不需要署名；
+        它存在的唯一目的是让外观适配的成功路径被真正跑过一次。换成真素材时连同注册表条目一起删。
+      </p>
     </section>
   );
 }
