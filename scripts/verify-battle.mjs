@@ -13,6 +13,7 @@
  * DOM, so a screenshot is the only honest evidence that the field layer drew anything.
  */
 import { setTimeout as delay } from "node:timers/promises";
+import { statSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 
 const args = process.argv.slice(2);
@@ -33,6 +34,34 @@ const maxSeconds = Number(readFlag("seconds", "60"));
 const shotPath = readFlag("shot", "");
 const shotAfterMs = Number(readFlag("shotAfter", "6")) * 1000;
 const shotHelpPath = readFlag("shotHelp", "");
+
+/**
+ * Rewrites a Git Bash POSIX path into a Windows one.
+ *
+ * `$PWD` in Git Bash is `/c/course_task/...`, and Node on Windows resolves a leading slash
+ * against the current drive — so the screenshot would be written to `C:\c\course_task\...`,
+ * which does not exist. Worse, a write refused outside the workspace is swallowed rather
+ * than thrown, so the script goes on to report a screenshot path that is not there. That
+ * is the exact shape of a verification run that proves nothing while looking green.
+ */
+function toLocalPath(value) {
+  if (process.platform !== "win32" || value.length === 0) {
+    return value;
+  }
+  const match = /^\/([a-zA-Z])\/(.*)$/.exec(value);
+  return match ? `${match[1]}:/${match[2]}` : value;
+}
+
+/** Writes a screenshot and refuses to report one that did not land. */
+async function writeScreenshot(target, base64) {
+  const resolved = toLocalPath(target);
+  await writeFile(resolved, Buffer.from(base64, "base64"));
+  const size = statSync(resolved).size;
+  if (size === 0) {
+    throw new Error(`screenshot ${resolved} was written but is empty`);
+  }
+  return { path: resolved, bytes: size };
+}
 
 async function findPageTarget() {
   const deadline = Date.now() + 20_000;
@@ -156,9 +185,42 @@ const initial = await evaluate(readState);
 
 // The first-run help overlay covers the arena on a fresh profile. Capture it if asked,
 // then dismiss it the way a user would before driving the battle.
+let help = null;
 if (shotHelpPath) {
+  // `.help` scrolls, so at the default window height the lower half of the card — which is
+  // where the generated content lives — never reaches the image. A screenshot of a clipped
+  // card is worse than no screenshot: it looks like the content is missing.
+  await send("Emulation.setDeviceMetricsOverride", {
+    width: 1000,
+    height: 2200,
+    deviceScaleFactor: 1,
+    mobile: false
+  });
+  await delay(500);
+
   const shot = await send("Page.captureScreenshot", { format: "png" });
-  await writeFile(shotHelpPath, Buffer.from(shot.data, "base64"));
+  const written = await writeScreenshot(shotHelpPath, shot.data);
+  await send("Emulation.clearDeviceMetricsOverride");
+
+  // A screenshot cannot show whether the generated text is *right*. The help screen is
+  // built from the content library at runtime, so a missing label or a broken derivation
+  // renders as a plausible-looking row — and a row reading `flying` or an empty
+  // description is exactly the kind of thing a reviewer skims past in an image.
+  help = await evaluate(`(() => {
+    const sections = [...document.querySelectorAll(".help__section")].map((section) => ({
+      title: section.querySelector("h3")?.textContent ?? "",
+      rows: [...section.querySelectorAll("li")].map((li) => ({
+        name: li.querySelector(".help__name")?.textContent ?? "",
+        desc: li.querySelector(".help__desc")?.textContent ?? ""
+      }))
+    }));
+    return {
+      visible: document.querySelector(".help") !== null,
+      sections,
+      blankDescriptions: sections.flatMap((s) => s.rows).filter((r) => r.desc.trim().length === 0).length
+    };
+  })()`);
+  help.screenshot = written;
 }
 await evaluate(`document.querySelector(".help__footer button")?.click()`);
 await delay(200);
@@ -170,6 +232,7 @@ await evaluate(`[...document.querySelectorAll(".panel__buttons button")].find((b
 let final = initial;
 let elapsed = 0;
 let shotTaken = false;
+let shotResult = null;
 const tickInterval = 1000;
 while (elapsed < maxSeconds * 1000) {
   await delay(tickInterval);
@@ -180,7 +243,7 @@ while (elapsed < maxSeconds * 1000) {
   // no traps mid-animation, which is precisely the state worth photographing.
   if (shotPath && !shotTaken && elapsed >= shotAfterMs) {
     const shot = await send("Page.captureScreenshot", { format: "png" });
-    await writeFile(shotPath, Buffer.from(shot.data, "base64"));
+    shotResult = await writeScreenshot(shotPath, shot.data);
     shotTaken = true;
   }
 
@@ -208,8 +271,9 @@ console.log(
       initial,
       final,
       elapsedSeconds: elapsed / 1000,
-      screenshot: shotPath || null,
-      helpScreenshot: shotHelpPath || null,
+      screenshot: shotResult,
+      helpScreenshot: shotHelpPath ? toLocalPath(shotHelpPath) : null,
+      help,
       afterReset,
       consoleErrors,
       exceptions

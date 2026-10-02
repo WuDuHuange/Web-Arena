@@ -1,3 +1,5 @@
+import { applyBuff, modifiersOf } from "./effects.ts";
+import type { BuffCatalog } from "./effects.ts";
 import { hitsTarget } from "./geometry.ts";
 import type { AbilitySpec, Combat, Entity } from "./types.ts";
 
@@ -83,7 +85,8 @@ export function stepCombat(
   ability: AbilitySpec,
   target: Entity | undefined,
   candidates: readonly Entity[],
-  tick: number
+  tick: number,
+  catalog: BuffCatalog
 ): CombatStepResult {
   const combat = self.combat;
   if (!combat || self.health.dead) {
@@ -96,11 +99,19 @@ export function stepCombat(
     return { events: [], removed: [] };
   }
 
+  // Cadence is scaled when a phase begins, not in the countdown. Scaling the countdown as
+  // well would apply the rate twice, which turns a 1.4x attack speed into 1.96x.
+  //
+  // Read here rather than at the top of the function on purpose: this line runs once per
+  // phase transition, not once per tick, and it is the difference between an allocation
+  // every tick per unit and one every few dozen ticks.
+  const rate = modifiersOf(self, catalog).attackRate;
+
   switch (combat.phase) {
     case "windup": {
       // The windup is over: the damaging frame begins now.
       combat.phase = "active";
-      combat.phaseTicksLeft = Math.max(ability.activeTicks, 1);
+      combat.phaseTicksLeft = Math.max(ability.activeTicks, 1) / rate;
       combat.applied = false;
       return { events: [], removed: [] };
     }
@@ -114,17 +125,17 @@ export function stepCombat(
       // lie.
       if (!combat.applied) {
         combat.applied = true;
-        applyActiveFrame(self, ability, target, candidates, events, removed);
+        applyActiveFrame(self, ability, target, candidates, events, removed, catalog);
       }
 
       combat.phase = "cooldown";
-      combat.phaseTicksLeft = Math.max(ability.cooldownTicks, 1);
+      combat.phaseTicksLeft = Math.max(ability.cooldownTicks, 1) / rate;
       return { events, removed };
     }
 
     case "cooldown": {
       combat.phase = "windup";
-      combat.phaseTicksLeft = Math.max(ability.windupTicks, 1);
+      combat.phaseTicksLeft = Math.max(ability.windupTicks, 1) / rate;
       // Advance the rotation so the next swing can use the next ability.
       combat.abilityIndex += 1;
       void tick;
@@ -140,7 +151,8 @@ function applyActiveFrame(
   target: Entity | undefined,
   candidates: readonly Entity[],
   events: DamageEvent[],
-  removed: number[]
+  removed: number[],
+  catalog: BuffCatalog
 ): void {
   const origin = self.transform.position;
   const facing = self.transform.facing;
@@ -154,6 +166,9 @@ function applyActiveFrame(
     : undefined;
 
   const maxTargets = Math.max(ability.maxTargets, 1);
+  // Hoisted out of the loop: the attacker's own modifiers cannot change while it is
+  // swinging, and a cone can hit ten candidates.
+  const attacker = modifiersOf(self, catalog);
   let hits = 0;
 
   for (const candidate of candidates) {
@@ -192,13 +207,27 @@ function applyActiveFrame(
     }
 
     hits += 1;
-    const amount = Math.max(ability.damage, 0);
+
+    // Mitigation is applied here, on the way in, so every damage source passes through it.
+    // Both sides count: an attacker's `damageOut` and a defender's `damageIn`, which is
+    // what lets a glass-cannon buff and an armour tag interact instead of overriding each
+    // other.
+    const defender = modifiersOf(candidate, catalog);
+    const amount = Math.max(ability.damage * attacker.damageOut * defender.damageIn, 0);
+
     candidate.health.current = Math.max(candidate.health.current - amount, 0);
 
     const killed = candidate.health.current === 0;
     if (killed) {
       candidate.health.dead = true;
       removed.push(candidate.id);
+    } else if (ability.appliesBuff) {
+      // A dead target is about to be removed, so a lasting effect on it would be garbage
+      // that outlives its owner for exactly one tick.
+      const spec = catalog(ability.appliesBuff.buffId);
+      if (spec) {
+        applyBuff(candidate, spec, self.id);
+      }
     }
 
     events.push({

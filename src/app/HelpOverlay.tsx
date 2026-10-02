@@ -1,6 +1,14 @@
-import { PROP_LIBRARY } from "../content/library.ts";
+import {
+  ABILITY_LIBRARY,
+  BUFF_LIBRARY,
+  CHARACTER_LIBRARY,
+  PROP_LIBRARY,
+  TAG_LABELS
+} from "../content/library.ts";
 import { PROP_PALETTE } from "../render/props.ts";
-import type { PropBehavior } from "../simulation/types.ts";
+import { TAG_RULES } from "../simulation/effects.ts";
+import type { TagRule } from "../simulation/effects.ts";
+import type { BuffSpec, PropBehavior } from "../simulation/types.ts";
 
 /**
  * First-run help.
@@ -53,8 +61,92 @@ function describeBehavior(behavior: PropBehavior, ticksPerSecond: number): strin
   }
 }
 
+/** The modifier fields a tag rule and a buff spec have in common. */
+interface ModifierFields {
+  readonly moveSpeed?: number;
+  readonly damageOut?: number;
+  readonly damageIn?: number;
+  readonly attackRate?: number;
+}
+
+/** `0.6` reads as `−40%`, which is what the number actually means to a player. */
+function asPercent(value: number): string {
+  const delta = Math.round((value - 1) * 100);
+  return `${delta > 0 ? "+" : "−"}${Math.abs(delta)}%`;
+}
+
+/**
+ * Turns a multiplier set into a sentence.
+ *
+ * Generated from the same numbers `modifiersOf` runs on, so the legend cannot drift away
+ * from what a tag or a buff actually does — which is the failure this whole file exists to
+ * avoid. A hand-written "装甲：更耐打" would still be true after someone retuned the values
+ * to mean the opposite.
+ */
+function describeModifiers(source: ModifierFields): string {
+  const parts: string[] = [];
+  if (source.moveSpeed !== undefined) {
+    parts.push(`移速 ${asPercent(source.moveSpeed)}`);
+  }
+  if (source.damageOut !== undefined) {
+    parts.push(`造成伤害 ${asPercent(source.damageOut)}`);
+  }
+  if (source.damageIn !== undefined) {
+    parts.push(`受到伤害 ${asPercent(source.damageIn)}`);
+  }
+  if (source.attackRate !== undefined) {
+    parts.push(`攻速 ${asPercent(source.attackRate)}`);
+  }
+  return parts.join("，");
+}
+
+function describeTag(rule: TagRule): string {
+  const parts: string[] = [];
+  const modifiers = describeModifiers(rule);
+  if (modifiers.length > 0) {
+    parts.push(modifiers);
+  }
+  if (rule.ignoresGroundHazards === true) {
+    parts.push("无视地面机关（熔岩／传送带／地刺／弹簧），但照常撞墙、被爆炸波及、被射击");
+  }
+  return parts.join("；");
+}
+
+/** Which shipped characters carry a tag, so the legend names a unit rather than a rule. */
+function tagCarriers(tag: string): string {
+  return CHARACTER_LIBRARY.filter((c) => (c.tags ?? []).includes(tag))
+    .map((c) => c.name)
+    .join("、");
+}
+
+/** Which shipped abilities apply a buff, and whose they are. */
+function buffSources(buffId: string): string {
+  const sources: string[] = [];
+  for (const character of CHARACTER_LIBRARY) {
+    for (const abilityId of character.abilityIds) {
+      const ability = ABILITY_LIBRARY.find((a) => a.id === abilityId);
+      if (ability?.spec.appliesBuff?.buffId === buffId) {
+        sources.push(`${character.name}的${ability.name}`);
+      }
+    }
+  }
+  return sources.join("、");
+}
+
+function describeBuff(spec: BuffSpec, ticksPerSecond: number): string {
+  const seconds = spec.durationTicks / ticksPerSecond;
+  const stacks = spec.maxStacks > 1 ? `，最多叠 ${spec.maxStacks} 层` : "";
+  const source = buffSources(spec.id);
+  const prefix = source.length > 0 ? `${source}命中后：` : "";
+  return `${prefix}${describeModifiers(spec)}，持续 ${Number(seconds.toFixed(1))} 秒${stacks}`;
+}
+
 export function HelpOverlay({ fixedStepMs, onClose, onDismissForever }: HelpOverlayProps) {
   const ticksPerSecond = 1000 / fixedStepMs;
+  const tags = Object.entries(TAG_RULES);
+  // Only the tags somebody actually carries are worth a row. A rule with no unit behind it
+  // is a rule a player will never meet.
+  const shippedTags = tags.filter(([tag]) => tagCarriers(tag).length > 0);
 
   return (
     <div className="help" role="dialog" aria-modal="true" aria-labelledby="help-title">
@@ -99,6 +191,38 @@ export function HelpOverlay({ fixedStepMs, onClose, onDismissForever }: HelpOver
               <span className="help__name">投射物</span>
               <span className="help__desc">炮台与神龛发射的暖色光点</span>
             </li>
+          </ul>
+
+          <h3 className="help__gap">单位特性</h3>
+          <p className="help__hint">
+            特性写在角色定义里，由能力表解释含义——特性本身不是效果，它只是一个声明。
+            每一条下面的数字就是仿真真正使用的倍率，不是描述。
+          </p>
+          <ul className="help__units">
+            {shippedTags.map(([tag, rule]) => (
+              <li key={tag}>
+                <span className="help__swatch help__swatch--none" />
+                <span className="help__name">{TAG_LABELS[tag] ?? tag}</span>
+                <span className="help__desc">
+                  {tagCarriers(tag)} · {describeTag(rule)}
+                </span>
+              </li>
+            ))}
+          </ul>
+
+          <h3 className="help__gap">负面效果</h3>
+          <p className="help__hint">
+            技能命中时施加，各自独立计时。重复命中只刷新时长、不延长；能叠层的按「相加」算，
+            所以第二层和第一层一样强，不会越叠越夸张。
+          </p>
+          <ul className="help__units">
+            {BUFF_LIBRARY.map((buff) => (
+              <li key={buff.id}>
+                <span className="help__swatch help__swatch--none" />
+                <span className="help__name">{buff.name}</span>
+                <span className="help__desc">{describeBuff(buff, ticksPerSecond)}</span>
+              </li>
+            ))}
           </ul>
 
           <h3 className="help__gap">场地机关</h3>

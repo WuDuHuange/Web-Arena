@@ -345,8 +345,11 @@ test("chain membership is decided by distance and spent state only", () => {
 
 test("mechanism allegiance is a pure predicate", () => {
   const aura = findProp("prop.lava").behavior;
-  const red = { faction: "red" };
-  const blue = { faction: "blue" };
+  // `tags` is not decoration on this stub. A mechanism now also asks whether its target
+  // passes over the floor, so a candidate without a tag list would fail on the read rather
+  // than on the answer. An entity always has one; see `createWorldFromSetup`.
+  const red = { faction: "red", tags: [] };
+  const blue = { faction: "blue", tags: [] };
 
   assert.equal(mechanismAffects(aura, "neutral", red), true, "a neutral hazard hurts everyone");
   assert.equal(mechanismAffects(aura, "neutral", blue), true);

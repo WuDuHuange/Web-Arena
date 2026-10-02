@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CONTENT_LIBRARY } from "../content/library.ts";
+import { CONTENT_LIBRARY, TAG_LABELS } from "../content/library.ts";
 import { validateContent } from "../content/validate.ts";
 import { defaultMatchup, mechanismMatchup, squadMatchup, stressMatchup } from "../content/deployment.ts";
 import { exportDeployment } from "../persistence/snapshot.ts";
@@ -55,6 +55,15 @@ interface Readout {
   redAlive: number;
   blueAlive: number;
   mechanismDamage: number;
+  /**
+   * Live effect instances across the whole field.
+   *
+   * Counted rather than listed: the panel is a status readout, not a combat log, and what
+   * a watcher needs to know is "is anything happening". Without this the effect system is
+   * invisible — a slow changes how fast a unit walks, which is real but easy to miss, and
+   * a number that only ever reads 0 looks identical to a system that is switched off.
+   */
+  activeEffects: number;
 }
 
 /** 60 Hz authoritative step. Render rate is free to differ. */
@@ -110,7 +119,8 @@ export function App() {
     droppedMs: 0,
     redAlive: 0,
     blueAlive: 0,
-    mechanismDamage: 0
+    mechanismDamage: 0,
+    activeEffects: 0
   });
 
   const applyPhase = useCallback((next: Phase) => {
@@ -394,6 +404,8 @@ export function App() {
               <dd className="panel__readout--red">{readout.redAlive}</dd>
               <dt>蓝方存活</dt>
               <dd className="panel__readout--blue">{readout.blueAlive}</dd>
+              <dt>生效中效果</dt>
+              <dd>{readout.activeEffects}</dd>
             </dl>
           </section>
 
@@ -418,6 +430,14 @@ export function App() {
                 <li key={character.id}>
                   <span className={`roster__dot roster__dot--${character.id.split(".")[0]}`} />
                   {character.name}
+                  {/* Tags sit next to the name rather than behind a tooltip: three of the
+                      eight units carry one, and a player who never learns which three are
+                      armoured has no way to read the battle. */}
+                  {(character.tags ?? []).map((tag) => (
+                    <span className="roster__tag" key={tag}>
+                      {TAG_LABELS[tag] ?? tag}
+                    </span>
+                  ))}
                   <span className="roster__cost">{character.cost}</span>
                 </li>
               ))}
@@ -532,6 +552,7 @@ function readSummary(simulation: Simulation): Readout {
     droppedMs: Math.round(simulation.droppedMs),
     redAlive: entities.filter((e) => e.combat && e.faction === "red").length,
     blueAlive: entities.filter((e) => e.combat && e.faction === "blue").length,
-    mechanismDamage: Math.round(simulation.mechanismDamage)
+    mechanismDamage: Math.round(simulation.mechanismDamage),
+    activeEffects: entities.reduce((total, e) => total + (e.buffs?.length ?? 0), 0)
   };
 }

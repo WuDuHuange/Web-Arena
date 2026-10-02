@@ -1,6 +1,6 @@
 import type { BattleSetup, CombatProfile, SpawnDef } from "../simulation/types.ts";
-import type { AbilitySpec } from "../simulation/types.ts";
-import { CHARACTER_LIBRARY, CONTENT_LIBRARY, PROP_LIBRARY } from "./library.ts";
+import type { AbilitySpec, BuffSpec } from "../simulation/types.ts";
+import { BUFF_LIBRARY, CHARACTER_LIBRARY, CONTENT_LIBRARY, PROP_LIBRARY } from "./library.ts";
 import type { CharacterDef, PropDef, PropPlacement } from "./schema.ts";
 
 /**
@@ -23,19 +23,32 @@ export interface LineupOptions {
   readonly props?: readonly PropPlacement[];
 }
 
-/** The simulation-relevant projection of every character in the library. */
+/**
+ * The simulation-relevant projection of every character in the library.
+ *
+ * `tags` is carried through deliberately. Dropping it here would leave the capability
+ * table in the core with nothing to interpret — the tags would validate, render in the
+ * content panel and then do absolutely nothing, which is the failure mode that is hardest
+ * to notice because every part of the system looks correct on its own.
+ */
 export function combatProfiles(): readonly CombatProfile[] {
   return CHARACTER_LIBRARY.map((c) => ({
     id: c.id,
     abilityIds: c.abilityIds,
     speed: c.speed,
-    aggroRange: c.aggroRange
+    aggroRange: c.aggroRange,
+    tags: c.tags ?? []
   }));
 }
 
 /** Every ability in the library, keyed by the id the character list references. */
 export function abilitySpecs(): readonly AbilitySpec[] {
   return CONTENT_LIBRARY.abilities.map((a) => a.spec);
+}
+
+/** Every timed effect in the library, so a battle can resolve an `appliesBuff` id. */
+export function buffSpecs(): readonly BuffSpec[] {
+  return BUFF_LIBRARY;
 }
 
 /**
@@ -104,6 +117,7 @@ export function buildLineup(options: LineupOptions): BattleSetup {
     bounds: ARENA_BOUNDS,
     spawns,
     abilities: abilitySpecs(),
+    buffs: buffSpecs(),
     characters: combatProfiles()
   };
 }
@@ -298,6 +312,7 @@ export function stressMatchup(fixedStepMs: number, perSide = 50): BattleSetup {
     bounds: ARENA_BOUNDS,
     spawns: [...spawns, ...propSpawns(props)],
     abilities: abilitySpecs(),
+    buffs: buffSpecs(),
     characters: combatProfiles()
   };
 }

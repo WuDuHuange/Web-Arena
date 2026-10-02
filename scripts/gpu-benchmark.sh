@@ -50,8 +50,20 @@ if [ -z "$CHROME_BIN" ]; then
 fi
 
 if [ ! -f dist/index.html ]; then
-  echo "dist/index.html 不存在。请先运行：npx vite build --emptyOutDir" >&2
+  echo "dist/index.html 不存在。请先运行：npx vite build" >&2
   exit 1
+fi
+
+# Chrome must be handed a native path.
+#
+# `$(pwd)` under Git Bash is `/c/course_task/projectArena`, and Chrome on Windows resolves a
+# leading slash against the current drive — so `--user-data-dir="$(pwd)/.bench-chrome-gpu"`
+# creates `C:\c\course_task\projectArena\.bench-chrome-gpu`. That is outside the project, so
+# it is not covered by .gitignore, it never gets cleaned up, and it costs ~68 MB per run.
+# `cygpath -w` is the conversion; on macOS and Linux the POSIX path is already correct.
+PROFILE_PATH="$(pwd)/$PROFILE_DIR"
+if command -v cygpath >/dev/null 2>&1; then
+  PROFILE_PATH="$(cygpath -w "$(pwd)/$PROFILE_DIR")"
 fi
 
 cleanup() {
@@ -76,7 +88,7 @@ echo "启动有头 Chrome（真实 GPU）..."
 "$CHROME_BIN" \
   --remote-debugging-port="$PORT" \
   --remote-allow-origins='*' \
-  --user-data-dir="$(pwd)/$PROFILE_DIR" \
+  --user-data-dir="$PROFILE_PATH" \
   --no-first-run \
   --no-default-browser-check \
   --disable-extensions \
@@ -94,6 +106,12 @@ done
 if ! curl -s "http://127.0.0.1:$PORT/json/version" >/dev/null 2>&1; then
   echo "Chrome 调试端口未就绪。" >&2
   exit 1
+fi
+
+# A wrong path form is silent: Chrome still starts, the benchmark still runs, and the only
+# symptom is 68 MB appearing somewhere you are not looking. Assert it landed where asked.
+if [ ! -d "$PROFILE_PATH" ]; then
+  echo "警告：Chrome 未在 $PROFILE_PATH 建立 profile，请检查 --user-data-dir 的路径形式。" >&2
 fi
 
 echo

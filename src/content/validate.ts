@@ -15,15 +15,96 @@ export interface ValidationResult {
  * as a clear message instead of a runtime failure mid-fight.
  *
  * Enforced: duplicate and empty ids, dangling ability references, a mismatch between an
- * ability's library id and its embedded spec id, and characters that would fight with no
- * abilities at all.
+ * ability's library id and its embedded spec id, characters that would fight with no
+ * abilities at all, and effects that are unreachable or that would silently do nothing.
  *
- * The last one is the subtle one. A character with an empty or unresolvable rotation
- * loads fine and then simply never attacks, which in a battle looks like a unit that is
- * broken in a way nobody can point at.
+ * The last of those is the theme. A character with an empty or unresolvable rotation loads
+ * fine and then simply never attacks. An ability whose `appliesBuff` names a buff that is
+ * not in the library resolves to nothing — `modifiersOf` skips unknown ids on purpose, so
+ * the attack still deals damage and only the effect is missing. Both look like a unit that
+ * is broken in a way nobody can point at, which is exactly what this function exists to
+ * turn into a message.
  */
 export function validateContent(library: ContentLibrary): ValidationResult {
   const issues: ValidationIssue[] = [];
+
+  // Buffs are checked first: the ability pass below needs the full set of valid ids to
+  // decide whether an `appliesBuff` reference dangles.
+  const buffIds = new Set<string>();
+  const buffs = library.buffs ?? [];
+  for (const buff of buffs) {
+    if (buff.id.length === 0) {
+      issues.push({ path: "buffs", message: "buff id must not be empty" });
+      continue;
+    }
+    if (buffIds.has(buff.id)) {
+      issues.push({ path: `buffs.${buff.id}`, message: "duplicate buff id" });
+      continue;
+    }
+    buffIds.add(buff.id);
+
+    // A zero or negative duration is dropped by `stepBuffs` on the very first tick, so the
+    // effect would never apply. It is not a crash, which is what makes it worth reporting.
+    if (!(buff.durationTicks > 0)) {
+      issues.push({
+        path: `buffs.${buff.id}.durationTicks`,
+        message: "durationTicks must be positive, or the effect expires before it applies"
+      });
+    }
+    if (!(buff.maxStacks >= 1)) {
+      issues.push({
+        path: `buffs.${buff.id}.maxStacks`,
+        message: "maxStacks must be at least 1"
+      });
+    }
+
+    // A multiplier at or below zero is silently clamped to the floor in `modifiersOf`, so
+    // the authored number and the simulated number would disagree with nothing to show for
+    // it. Reported rather than clamped quietly.
+    for (const key of ["moveSpeed", "damageOut", "damageIn", "attackRate"] as const) {
+      const value = buff[key];
+      if (value !== undefined && !(value > 0)) {
+        issues.push({
+          path: `buffs.${buff.id}.${key}`,
+          message: `${key} must be positive; a multiplier is clamped to the floor rather than honoured`
+        });
+      }
+    }
+
+    // A buff that modifies nothing is a buff that does nothing. It costs a tick of bookkeeping
+    // per entity per tick and produces no observable effect, which is worse than absent.
+    const changesSomething =
+      buff.moveSpeed !== undefined ||
+      buff.damageOut !== undefined ||
+      buff.damageIn !== undefined ||
+      buff.attackRate !== undefined;
+    if (!changesSomething) {
+      issues.push({
+        path: `buffs.${buff.id}`,
+        message: "a buff that modifies no stat has no effect"
+      });
+    }
+  }
+
+  // Exclusivity is a cross-reference, so it can only be checked once every id is known.
+  for (const buff of buffs) {
+    for (const excluded of buff.excludes ?? []) {
+      if (!buffIds.has(excluded)) {
+        issues.push({
+          path: `buffs.${buff.id}.excludes`,
+          message: `dangling buff reference "${excluded}"`
+        });
+      }
+      if (excluded === buff.id) {
+        // `applyBuff` removes the exclusions and then re-adds this buff, so the net effect is
+        // a refresh. It is not a crash and it is never what the author meant.
+        issues.push({
+          path: `buffs.${buff.id}.excludes`,
+          message: "a buff must not exclude itself"
+        });
+      }
+    }
+  }
 
   const abilityIds = new Set<string>();
   for (const ability of library.abilities) {
@@ -63,6 +144,16 @@ export function validateContent(library: ContentLibrary): ValidationResult {
       issues.push({
         path: `abilities.${ability.id}.maxTargets`,
         message: "maxTargets must be at least 1"
+      });
+    }
+
+    // An ability that names a buff nobody defines still hits and still deals its damage;
+    // only the effect is missing. Silent partial failure, so it is a validation error.
+    const applied = ability.spec.appliesBuff;
+    if (applied && !buffIds.has(applied.buffId)) {
+      issues.push({
+        path: `abilities.${ability.id}.appliesBuff`,
+        message: `dangling buff reference "${applied.buffId}"`
       });
     }
   }

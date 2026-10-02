@@ -188,6 +188,16 @@ button:disabled {
   background: #4b8fe0;
 }
 
+.roster__tag {
+  margin-left: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 16px;
+}
+
 .roster__cost {
   margin-left: auto;
   color: var(--muted);

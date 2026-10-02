@@ -90,6 +90,40 @@ export interface Combat {
 }
 
 /**
+ * An authored effect definition.
+ *
+ * Lives here rather than in the effects system for the same reason `AbilitySpec` lives
+ * here: the content library and the runtime must share one shape, or they drift.
+ */
+export interface BuffSpec {
+  readonly id: string;
+  readonly name: string;
+  readonly durationTicks: number;
+  /** How many times this may stack. 1 means a re-application only refreshes it. */
+  readonly maxStacks: number;
+  readonly moveSpeed?: number;
+  readonly damageOut?: number;
+  readonly damageIn?: number;
+  readonly attackRate?: number;
+  /** Buff ids removed when this one lands. Mutual exclusion, declared rather than implied. */
+  readonly excludes?: readonly string[];
+}
+
+/** A live effect on an entity. Mutable: it counts down and stacks. */
+export interface BuffInstance {
+  readonly id: string;
+  /** Who applied it. Kept for attribution even though nothing reads it yet. */
+  readonly sourceId: EntityId;
+  ticksLeft: number;
+  stacks: number;
+}
+
+/** What an ability does to whatever it hits, beyond damage. */
+export interface BuffApplication {
+  readonly buffId: string;
+}
+
+/**
  * Composition over inheritance: every entity carries the same small set of
  * components and differs by data, not by class.
  */
@@ -121,6 +155,11 @@ export interface Entity {
    * anything a spring or a blast has thrown. See `PersistentVelocity`.
    */
   persistentVelocity?: PersistentVelocity;
+  /**
+   * Active timed effects. Absent rather than empty for most entities, so the modifier
+   * lookup can take a fast path.
+   */
+  buffs?: BuffInstance[];
 }
 
 /**
@@ -179,6 +218,14 @@ export interface AbilitySpec {
    * arc can be forgiving and a narrow line can demand accuracy.
    */
   readonly turnToTarget: number;
+  /**
+   * Effect applied to everything this ability hits, in addition to damage.
+   *
+   * Riding on the ability rather than on the character means "this attack slows" is a
+   * property of the attack, which is what makes a rotation of several abilities able to
+   * carry different effects without any per-character branching.
+   */
+  readonly appliesBuff?: BuffApplication;
 }
 
 /**
@@ -297,6 +344,8 @@ export interface SpawnDef {
   readonly facing?: number;
   readonly tags?: readonly string[];
   readonly appearance?: string;
+  /** Effects the entity starts the battle with, already resolved to live instances. */
+  readonly buffs?: readonly BuffInstance[];
   /**
    * Character this spawn fights as. When present the entity gets a `combat` component
    * built from that character's ability list. Absent means a non-combatant.
@@ -325,6 +374,14 @@ export interface BattleSetup {
    */
   readonly abilities: readonly AbilitySpec[];
   /**
+   * Effect definitions the battle may apply, by id.
+   *
+   * Passed in for the same reason `abilities` is: the core resolves a buff id through what
+   * it was handed, never through a global registry, so a test can supply two effects and
+   * a head-less run needs no content pipeline.
+   */
+  readonly buffs?: readonly BuffSpec[];
+  /**
    * Per-character combat stats the core needs to simulate a unit.
    *
    * A trimmed projection of the content library rather than the whole `CharacterDef`:
@@ -341,4 +398,11 @@ export interface CombatProfile {
   readonly speed: number;
   /** How far this character looks for a target. */
   readonly aggroRange: number;
+  /**
+   * Declarative tags the character fights with.
+   *
+   * Carried on the profile rather than read from the content library so the core keeps its
+   * "no global registry" property: a test can hand it a unit with any tag it likes.
+   */
+  readonly tags?: readonly string[];
 }

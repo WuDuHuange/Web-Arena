@@ -1,4 +1,4 @@
-import type { AbilitySpec, PropBehavior } from "../simulation/types.ts";
+import type { AbilitySpec, BuffSpec, PropBehavior } from "../simulation/types.ts";
 
 /**
  * Content definitions. JSON is the source of truth at runtime; these interfaces are the
@@ -40,6 +40,14 @@ export interface CharacterDef {
   readonly speed: number;
   /** How far this character looks for something to attack. */
   readonly aggroRange: number;
+  /**
+   * Declarative tags this character always carries.
+   *
+   * A tag has no built-in meaning; the capability table in `simulation/effects.ts` is what
+   * interprets it. Keeping that split is what stops `flying` from quietly becoming
+   * "ignores everything".
+   */
+  readonly tags?: readonly string[];
 }
 
 /**
@@ -72,4 +80,6 @@ export interface ContentLibrary {
   readonly characters: readonly CharacterDef[];
   readonly abilities: readonly AbilityDef[];
   readonly props: readonly PropDef[];
+  /** Timed effects abilities may apply. Referenced by `AbilitySpec.appliesBuff.buffId`. */
+  readonly buffs: readonly BuffSpec[];
 }

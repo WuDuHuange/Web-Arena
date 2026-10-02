@@ -5,6 +5,16 @@ export type { CombatStepResult, DamageEvent } from "./combat.ts";
 export { FixedStepClock } from "./clock.ts";
 export type { ClockOptions } from "./clock.ts";
 export {
+  NEUTRAL_MODIFIER,
+  TAG_RULES,
+  applyBuff,
+  hasTag,
+  ignoresGroundHazards,
+  modifiersOf,
+  stepBuffs
+} from "./effects.ts";
+export type { BuffCatalog, StatModifier, TagRule } from "./effects.ts";
+export {
   angleDelta,
   distance,
   headingTo,
@@ -50,6 +60,9 @@ export type {
   AbilityGeometry,
   AbilitySpec,
   BattleSetup,
+  BuffApplication,
+  BuffInstance,
+  BuffSpec,
   Collider,
   Combat,
   CombatProfile,

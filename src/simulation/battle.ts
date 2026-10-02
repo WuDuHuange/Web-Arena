@@ -1,6 +1,8 @@
 import { findNearestTarget, resolveFacing, resolveMovementIntent } from "./ai.ts";
 import { cadenceTicks, selectAbility, stepCombat, stopDistanceFor } from "./combat.ts";
-import type { AbilitySpec, Entity, Faction } from "./types.ts";
+import { modifiersOf } from "./effects.ts";
+import type { BuffCatalog } from "./effects.ts";
+import type { AbilitySpec, BuffSpec, Entity, Faction } from "./types.ts";
 import type { World } from "./world.ts";
 
 /**
@@ -37,9 +39,17 @@ export class Battle {
   private readonly characterSpeed = new Map<string, number>();
   private readonly characterAggro = new Map<string, number>();
   private readonly pendingRemovals: number[] = [];
+  private readonly buffById = new Map<string, BuffSpec>();
+  private readonly catalog: BuffCatalog;
 
-  constructor(world: World, abilities: readonly AbilitySpec[]) {
+  constructor(world: World, abilities: readonly AbilitySpec[], buffs: readonly BuffSpec[] = []) {
     this.abilities = abilities;
+    for (const buff of buffs) {
+      this.buffById.set(buff.id, buff);
+    }
+    // A lookup function rather than the Map itself, so the effects system never holds a
+    // reference to mutable battle state.
+    this.catalog = (id: string) => this.buffById.get(id);
     void world;
   }
 
@@ -74,8 +84,11 @@ export class Battle {
       const target = findNearestTarget(entity, entities);
 
       const speed = this.characterSpeed.get(combat.characterId) ?? 0;
+      // A slow is a movement modifier, not a rewrite of the character's stats: the base
+      // speed stays in the content library and the effect is layered on top of it.
+      const moveScale = modifiersOf(entity, this.catalog).moveSpeed;
       const stop = current ? stopDistanceFor(current) : 0;
-      resolveMovementIntent(entity, target, speed, stop);
+      resolveMovementIntent(entity, target, speed * moveScale, stop);
 
       // Only turn while not mid-swing, so a committed attack keeps its direction. This is
       // what makes sidestepping a telegraphed attack actually work.
@@ -101,7 +114,7 @@ export class Battle {
       }
 
       const target = findNearestTarget(entity, entities);
-      const result = stepCombat(entity, ability, target, entities, 0);
+      const result = stepCombat(entity, ability, target, entities, 0, this.catalog);
 
       for (const event of result.events) {
         damage += event.amount;

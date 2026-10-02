@@ -1,3 +1,4 @@
+import { ignoresGroundHazards } from "./effects.ts";
 import { distance, headingTo, hitsCircle } from "./geometry.ts";
 import type { Entity, PropBehavior, PropTrigger } from "./types.ts";
 
@@ -82,17 +83,40 @@ const EMPTY: MechanismTickResult = {
 };
 
 /**
+ * The mechanisms that are physically part of the floor.
+ *
+ * A flying unit passes over these and nothing else. Keying the exemption on the mechanism
+ * rather than on the unit is the whole safety property: `flying` cannot grow into
+ * "ignores everything" by accident, because the list of things it ignores is right here
+ * and a barrel blast or a turret shot is not on it.
+ */
+const GROUND_BOUND: ReadonlySet<PropTrigger> = new Set<PropTrigger>([
+  "aura",
+  "conveyor",
+  "spring",
+  "spike"
+]);
+
+/**
  * Whether a mechanism may affect an entity at all.
  *
  * `hostile` is evaluated against the mechanism's own faction, so a turret owned by neutral
  * shoots at everyone while one owned by red shoots only at blue. Keeping this a pure
  * predicate means a test can ask the question without building a world.
+ *
+ * This is the single place the ground-hazard exemption is applied, which is why it lives
+ * here rather than in each `step*` function: there are four ground mechanisms and three
+ * call sites inside them, and a check that has to be remembered in three places is a check
+ * that will be missing from one of them.
  */
 export function mechanismAffects(
   behavior: PropBehavior,
   ownerFaction: Entity["faction"],
   target: Entity
 ): boolean {
+  if (GROUND_BOUND.has(behavior.kind) && ignoresGroundHazards(target)) {
+    return false;
+  }
   switch (behavior.affects) {
     case "all":
       return true;

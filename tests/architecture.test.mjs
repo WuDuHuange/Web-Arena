@@ -169,7 +169,20 @@ function makeValidLibrary() {
         aggroRange: 400
       }
     ],
-    props: [{ id: "barrel", name: "Barrel", behavior: makePropBehavior(), appearance: "barrel" }]
+    props: [{ id: "barrel", name: "Barrel", behavior: makePropBehavior(), appearance: "barrel" }],
+    buffs: []
+  };
+}
+
+/** A well-formed timed effect, so each bad case below differs in exactly one field. */
+function makeBuff(overrides = {}) {
+  return {
+    id: "slow",
+    name: "slow",
+    durationTicks: 60,
+    maxStacks: 1,
+    moveSpeed: 0.5,
+    ...overrides
   };
 }
 
@@ -233,6 +246,79 @@ test("content validation catches a cone with no angle", () => {
   const result = validateContent(brokenCone);
   assert.equal(result.ok, false);
   assert.match(result.issues[0].message, /positive halfAngle/);
+});
+
+test("a well-formed library with effects passes validation", () => {
+  const valid = makeValidLibrary();
+  const withEffects = {
+    ...valid,
+    buffs: [
+      makeBuff({ id: "slow", moveSpeed: 0.5, excludes: ["haste"] }),
+      makeBuff({ id: "haste", moveSpeed: 1.4 })
+    ],
+    abilities: [
+      { ...valid.abilities[0], spec: { ...valid.abilities[0].spec, appliesBuff: { buffId: "slow" } } }
+    ]
+  };
+  const result = validateContent(withEffects);
+  assert.equal(
+    result.ok,
+    true,
+    `expected a clean library, got ${JSON.stringify(result.issues, null, 2)}`
+  );
+});
+
+test("content validation catches effects that would silently do nothing", () => {
+  const valid = makeValidLibrary();
+
+  // A buff that modifies no stat. It costs a per-entity allocation and a countdown every
+  // tick and produces nothing observable, which is worse than not existing.
+  const inert = { ...valid, buffs: [makeBuff({ moveSpeed: undefined })] };
+  const inertResult = validateContent(inert);
+  assert.equal(inertResult.ok, false);
+  assert.match(inertResult.issues[0].message, /modifies no stat/);
+
+  // Zero duration: `stepBuffs` drops it on the tick it lands, so the effect never applies.
+  const brief = { ...valid, buffs: [makeBuff({ durationTicks: 0 })] };
+  assert.match(validateContent(brief).issues[0].message, /durationTicks must be positive/);
+
+  // A multiplier at or below zero is silently clamped by `modifiersOf`, so the authored
+  // number and the simulated number disagree with nothing to show for it. A negative
+  // movement multiplier would otherwise mean a unit walking backwards.
+  const negative = { ...valid, buffs: [makeBuff({ moveSpeed: -1 })] };
+  assert.match(validateContent(negative).issues[0].message, /must be positive/);
+
+  const zeroStacks = { ...valid, buffs: [makeBuff({ maxStacks: 0 })] };
+  assert.match(validateContent(zeroStacks).issues[0].message, /at least 1/);
+
+  const duplicate = { ...valid, buffs: [makeBuff(), makeBuff()] };
+  assert.match(validateContent(duplicate).issues[0].message, /duplicate buff id/);
+});
+
+test("content validation catches dangling effect references", () => {
+  const valid = makeValidLibrary();
+
+  // An ability naming a buff nobody defines. `modifiersOf` skips unknown ids on purpose,
+  // so the attack still lands and only the effect is missing — the hardest kind of failure
+  // to notice, because every part of the system looks correct on its own.
+  const danglingApply = {
+    ...valid,
+    buffs: [makeBuff()],
+    abilities: [
+      { ...valid.abilities[0], spec: { ...valid.abilities[0].spec, appliesBuff: { buffId: "ghost" } } }
+    ]
+  };
+  const applyResult = validateContent(danglingApply);
+  assert.equal(applyResult.ok, false);
+  assert.match(applyResult.issues[0].message, /dangling buff reference "ghost"/);
+
+  const danglingExclude = { ...valid, buffs: [makeBuff({ excludes: ["ghost"] })] };
+  assert.match(validateContent(danglingExclude).issues[0].message, /dangling buff reference "ghost"/);
+
+  // A self-exclusion removes the buff and then re-adds it, which nets out to a refresh. It
+  // is never a crash and never what the author meant.
+  const selfExcluding = { ...valid, buffs: [makeBuff({ excludes: ["slow"] })] };
+  assert.match(validateContent(selfExcluding).issues[0].message, /must not exclude itself/);
 });
 
 /**

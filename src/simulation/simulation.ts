@@ -2,6 +2,7 @@ import { PhysicsAdapter } from "../physics/adapter.ts";
 import { Battle } from "./battle.ts";
 import type { TickOutcome } from "./battle.ts";
 import { FixedStepClock } from "./clock.ts";
+import { stepBuffs } from "./effects.ts";
 import { blast, stepMechanisms, stepProjectiles } from "./mechanisms.ts";
 import type { MechanismDamage, ProjectileRequest, VelocityOverlay } from "./mechanisms.ts";
 import { createRng } from "./rng.ts";
@@ -47,13 +48,19 @@ const MIN_IMPULSE = 2;
  * test runner with no renderer present.
  *
  * One `step()` is one authoritative tick and does exactly this, in order:
- *   1. Resolve intent and combat (the `Battle` orchestrator).
- *   2. Resolve field mechanisms: continuous sources, then triggers and emitters.
- *   3. Walk any blast chains, bounded by `MAX_CHAIN_LINKS`.
- *   4. Create the projectiles emitters asked for, and advance the ones already in flight.
- *   5. Remove everything that died or expired this tick, from world and physics alike.
- *   6. Push intent into Matter and let it resolve hard-body motion.
- *   7. Copy resolved positions back.
+ *   1. Advance every timed effect and drop the expired ones.
+ *   2. Resolve intent and combat (the `Battle` orchestrator).
+ *   3. Resolve field mechanisms: continuous sources, then triggers and emitters.
+ *   4. Walk any blast chains, bounded by `MAX_CHAIN_LINKS`.
+ *   5. Create the projectiles emitters asked for, and advance the ones already in flight.
+ *   6. Remove everything that died or expired this tick, from world and physics alike.
+ *   7. Push intent into Matter and let it resolve hard-body motion.
+ *   8. Copy resolved positions back.
+ *
+ * Effects tick first because a buff applied during this tick's combat should get its full
+ * authored duration, not duration-minus-one. Counting down first also means an effect that
+ * expires does so before anything reads its modifiers this tick, so the tick a slow ends is
+ * already a full-speed tick rather than a half-speed one.
  *
  * Mechanisms run after combat so a barrel triggered by a unit that died this tick still
  * has a stable entity list to read, and projectiles are created before the removal pass so
@@ -85,7 +92,7 @@ export class Simulation {
 
     this.abilitiesById = new Map(setup.abilities.map((a) => [a.id, a]));
 
-    this.battle = new Battle(this.world, setup.abilities);
+    this.battle = new Battle(this.world, setup.abilities, setup.buffs ?? []);
     for (const profile of setup.characters ?? []) {
       const abilities = profile.abilityIds
         .map((id) => this.abilitiesById.get(id))
@@ -119,17 +126,22 @@ export class Simulation {
   step(): void {
     this.clock.commitStep();
 
-    // 1. Intent and combat resolution.
+    // 1. Timed effects count down first. A buff applied last tick is already running, and
+    //    one applied during this tick's combat gets its full duration rather than losing a
+    //    tick to bookkeeping order.
+    stepBuffs(this.world.all());
+
+    // 2. Intent and combat resolution.
     this.lastOutcome = this.battle.run(this.world);
 
-    // 2. Field mechanisms. Overlays are held until movement is written, so a conveyor or a
+    // 3. Field mechanisms. Overlays are held until movement is written, so a conveyor or a
     //    blast shove cannot be overwritten by the AI's own intent later in the same tick.
     const entities = this.world.all();
     const mechanisms = stepMechanisms(entities, this.clock.steps);
     const overlays: VelocityOverlay[] = [...mechanisms.overlays];
     const mechanismDamage: MechanismDamage[] = [...mechanisms.damage];
 
-    // 3. Blast chains. A queue with a hard cap, not recursion: a ring of barrels is a legal
+    // 4. Blast chains. A queue with a hard cap, not recursion: a ring of barrels is a legal
     //    layout and a recursive walk would not terminate on one.
     const pending = [...mechanisms.detonations];
     let links = 0;
@@ -152,7 +164,7 @@ export class Simulation {
       this.pendingRemovals.push(barrel.id);
     }
 
-    // 4. Emitters: create this tick's shots, then advance every shot already in flight.
+    // 5. Emitters: create this tick's shots, then advance every shot already in flight.
     for (const request of mechanisms.projectiles) {
       this.spawnProjectile(request);
     }
@@ -171,7 +183,7 @@ export class Simulation {
       }
     }
 
-    // 5. Flush the dead and the spent. Physics bodies must go too, or a corpse keeps
+    // 6. Flush the dead and the spent. Physics bodies must go too, or a corpse keeps
     //    blocking the living and the arena slowly fills with invisible obstacles.
     const removals = this.battle.takeRemovals();
     for (const id of removals) {
@@ -187,12 +199,12 @@ export class Simulation {
       this.physics.forget(unique);
     }
 
-    // 6. Push movement intent and resolve hard-body motion.
+    // 7. Push movement intent and resolve hard-body motion.
     this.applyMovementIntent(overlays);
     this.physics.applyVelocities(this.world);
     this.physics.step(this.setup.fixedStepMs);
 
-    // 7. Copy resolved motion back into the authoritative world.
+    // 8. Copy resolved motion back into the authoritative world.
     this.physics.writeBack(this.world);
   }
 

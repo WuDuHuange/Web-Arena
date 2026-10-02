@@ -10,7 +10,17 @@ export default defineConfig({
   preview: { host: "127.0.0.1" },
   build: {
     outDir: "dist",
-    // Preserve existing files locally. Publish from a fresh CI workspace.
-    emptyOutDir: false
+    // Empty the output directory on every build.
+    //
+    // This was previously `false`, with the reasoning "publish from a fresh CI workspace".
+    // That reasoning only holds on CI. Locally it means `dist/` is the union of every build
+    // ever run, and the artifact stops answering the one question that matters before a
+    // release: *is what I am about to publish the thing I just built?* The answer was no —
+    // a run of stale chunks from four generations back pushed the shipped bundle from
+    // ~263 kB to ~458 kB gzipped while every individual file still looked correct.
+    //
+    // `scripts/check-build.mjs` catches the accumulation, but catching it is not the same
+    // as not producing it.
+    emptyOutDir: true
   }
 });

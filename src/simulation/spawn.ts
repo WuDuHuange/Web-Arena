@@ -36,6 +36,14 @@ function toEntity(
     render: { appearance: spawn.appearance ?? defaultAppearance(spawn) }
   };
 
+  // Effects the entity starts with are copied, not shared. A battle mutates `ticksLeft`
+  // and `stacks` in place, so handing every spawn the same objects would make one unit's
+  // slow expire on another unit's timer — and a reset would restore the *drained*
+  // duration rather than the authored one.
+  if (spawn.buffs && spawn.buffs.length > 0) {
+    base.buffs = spawn.buffs.map((buff) => ({ ...buff }));
+  }
+
   // Only a projectile carries its own velocity between ticks.
   //
   // It is a kinematic mover: it is in the physics world so it can shove bodies aside, never
@@ -98,6 +106,9 @@ function withCombat(
 
   return {
     ...base,
+    // A tag list on the spawn wins; otherwise the character's own tags apply. That is what
+    // lets a scenario field an armoured blade without editing the character definition.
+    tags: base.tags.length > 0 ? base.tags : (character.tags ?? []),
     combat: {
       characterId: character.id,
       abilityIndex: 0,
