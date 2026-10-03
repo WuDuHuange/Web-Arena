@@ -6,11 +6,14 @@
  * measures the thing the architecture document actually promised: 100 units plus 20
  * props sustained at 60 FPS in a real browser.
  *
- * Division of labour, learned the hard way on this machine:
- *   - bash starts Chrome with --remote-debugging-port and keeps it alive.
- *   - this script only *connects* over CDP.
- * Spawning Chrome from Node yields a /json/list with only a background_page target and
- * no page target, so the connection silently has nothing to attach to.
+ * Division of labour: the caller launches Chrome with --remote-debugging-port and keeps it
+ * alive; this script only *connects* over CDP. `scripts/gpu-benchmark.mjs` is that caller.
+ *
+ * An earlier version of this comment claimed spawning Chrome from Node yields a /json/list
+ * with only a background_page target. That is not true, and it was never the cause of
+ * anything: `gpu-benchmark.mjs` spawns Chrome from Node and gets a page target every run.
+ * The real requirement is that the launched URL be a real navigation rather than
+ * `about:blank` — the caller passes the scene URL for that reason.
  *
  * Usage:
  *   node scripts/benchmark.mjs <pageUrl> [--seconds=10] [--port=9333]
