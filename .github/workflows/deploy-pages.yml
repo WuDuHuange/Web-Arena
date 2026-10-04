@@ -29,18 +29,16 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      # Pages must be switched on once by hand: Settings -> Pages -> Source: "GitHub Actions".
+      # This step only *reads* that setting; nothing in this workflow can create it.
+      #
+      # `enablement: true` looks like the fix and is not. Creating a Pages site calls
+      # POST /repos/{owner}/{repo}/pages, which requires the "Administration" (write)
+      # permission. The `permissions:` key exposes 16 scopes and `administration` is not
+      # among them, so GITHUB_TOKEN can never satisfy it. Run #2 died here with
+      # "Resource not accessible by integration". Re-adding `enablement: true` will not
+      # help — the setting above is the only way through.
       - uses: actions/configure-pages@v5
-        with:
-          # Without this the action only *checks* whether Pages is enabled, and fails when it
-          # is not. That is exactly what happened on the first real push: the build job passed
-          # and then died here with "Get Pages site failed ... HttpError: Not Found", because
-          # a repository that has never deployed has no Pages site to configure. The workflow
-          # was correct; the repository was simply unconfigured, and nothing said so.
-          #
-          # Turning it on makes the deploy self-sufficient rather than dependent on a settings
-          # page someone has to remember. It is idempotent — on a repository that already has
-          # Pages enabled it does nothing.
-          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
