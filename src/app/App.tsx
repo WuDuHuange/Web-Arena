@@ -36,6 +36,8 @@ import { exportDeployment } from "../persistence/snapshot.ts";
 import { parseDeployment, summariseDeployment } from "../persistence/deployment-io.ts";
 import type { DeploymentSummary } from "../persistence/deployment-io.ts";
 import { createBattlefield } from "../render/battlefield.ts";
+import { projectionKindFrom } from "../render/projection.ts";
+import type { ProjectionKind } from "../render/projection.ts";
 import type { Battlefield } from "../render/battlefield.ts";
 import type { AppearanceReportRow } from "../render/atlas.ts";
 import type { PlacementMarker } from "../render/placement.ts";
@@ -151,6 +153,21 @@ function resolveSetup(): { setup: BattleSetup; scene: string } {
       return { setup: defaultMatchup(FIXED_STEP_MS), scene: "battle" };
   }
 }
+
+/**
+ * Which projection the battlefield draws with.
+ *
+ * A modifier rather than another scene, because the interesting question is not "what does
+ * the isometric view look like" but "what does *this* fight look like in it". Any scene can
+ * be opened either way by changing one query parameter, which is what makes the two views
+ * comparable at all.
+ *
+ * Read once at module load. The renderer rebuilds on arena bounds, not on this, so a value
+ * that changed mid-session would be applied to nothing.
+ */
+const VIEW: ProjectionKind = projectionKindFrom(
+  new URLSearchParams(window.location.search).get("view")
+);
 
 /**
  * Application shell.
@@ -472,7 +489,7 @@ export function App() {
     let disposed = false;
     setBattlefieldReady(false);
 
-    void createBattlefield(host, bounds).then((battlefield) => {
+    void createBattlefield(host, bounds, { projection: VIEW }).then((battlefield) => {
       if (disposed) {
         battlefield.destroy();
         return;
@@ -819,6 +836,7 @@ export function App() {
         <h1>Project Arena</h1>
         <span className="app__badge">对战闭环</span>
         <span className="app__badge">场景：{scene}</span>
+        {VIEW === "iso" && <span className="app__badge">视图：等距 2.5D（实验）</span>}
         <button type="button" className="app__help" onClick={() => setHelpOpen(true)}>
           说明
         </button>
