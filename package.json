@@ -26,6 +26,7 @@
     "verify:editor": "node scripts/verify-editor.mjs",
     "verify:appearance": "node --experimental-strip-types scripts/verify-appearance.mjs",
     "verify:iso": "node --experimental-strip-types scripts/verify-iso.mjs",
+    "verify:live": "node scripts/verify-live.mjs",
     "check:build": "node scripts/check-build.mjs",
     "bench:gpu": "node scripts/gpu-benchmark.mjs",
     "preview": "vite preview --host 127.0.0.1 --strictPort"
