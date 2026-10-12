@@ -121,6 +121,20 @@ interface Readout {
 /** 60 Hz authoritative step. Render rate is free to differ. */
 const FIXED_STEP_MS = 1000 / 60;
 
+/**
+ * Playback rates, as a multiplier on the frame delta the clock is fed.
+ *
+ * Capped at 4× because `Simulation` clamps catch-up at 8 steps per `advance` call: at 60 FPS
+ * a 4× rate asks for four steps a frame, comfortably inside the clamp, while 8× would ask
+ * for exactly the limit and start silently discarding simulated time the moment a frame ran
+ * long. The clamp is not raised to make room — it is what stops a backgrounded tab from
+ * replaying a backlog, and trading that away for a faster fast-forward is a bad deal.
+ *
+ * Slowing down is the point of the list as much as speeding up: a mechanism that fires for
+ * three ticks is invisible at 60 Hz and obvious at 0.25×.
+ */
+const SPEEDS = [0.25, 0.5, 1, 2, 4] as const;
+
 /** One arrow-key nudge, and the fine step with Shift held. */
 const NUDGE_COARSE = 8;
 const NUDGE_FINE = 1;
@@ -219,6 +233,15 @@ export function App() {
   );
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
+  /**
+   * Playback rate, and the ref the render loop reads.
+   *
+   * The loop is installed once, so it cannot close over a `speed` that changes later. The
+   * ref is what lets the buttons take effect without tearing down the animation frame, and
+   * writing both in one place is what keeps the two from drifting apart.
+   */
+  const [speed, setSpeed] = useState<number>(1);
+  const speedRef = useRef(1);
   const [helpOpen, setHelpOpen] = useState(() => !readHelpSeen());
   const [importIssues, setImportIssues] = useState<readonly string[]>([]);
   const [importSummary, setImportSummary] = useState<DeploymentSummary | null>(null);
@@ -397,7 +420,12 @@ export function App() {
       const simulation = simulationRef.current;
       if (simulation) {
         if (phaseRef.current === "running") {
-          simulation.advance(delta);
+          // The rate scales the *elapsed time* fed to the clock, never the step size: the
+          // simulation still advances in whole fixed steps, so 0.25x and 4x produce the same
+          // tick sequence as 1x, just spread across a different amount of wall-clock time.
+          // Scaling the step size instead would change skill timing and damage numbers, which
+          // is precisely what the fixed step exists to prevent.
+          simulation.advance(delta * speedRef.current);
           const snapshot = simulation.snapshot();
           // Cues are derived from the snapshot, never emitted by the simulation, so a
           // dropped or duplicated frame can only affect sound — never battle state.
@@ -761,6 +789,31 @@ export function App() {
   }, []);
 
   /**
+   * Advances a paused battle by exactly one tick.
+   *
+   * Only from 暂停: a running battle is already advancing, and a decided one has nothing
+   * left to advance. The readout is refreshed here rather than left to the 250 ms poll, so
+   * the tick counter moves on the same click as the picture does.
+   */
+  const handleStepOnce = useCallback(() => {
+    if (phaseRef.current !== "paused") {
+      return;
+    }
+    const simulation = simulationRef.current;
+    if (!simulation) {
+      return;
+    }
+    simulation.stepManually();
+    setReadout(readSummary(simulation));
+  }, []);
+
+  /** Writes the ref and the state together, so the loop and the buttons cannot disagree. */
+  const handleChangeSpeed = useCallback((next: number) => {
+    speedRef.current = next;
+    setSpeed(next);
+  }, []);
+
+  /**
    * Restores the field to its starting state.
    *
    * Resets to the draft currently loaded, not to the scene default. After an import, "reset"
@@ -858,8 +911,20 @@ export function App() {
               >
                 开战
               </button>
-              <button type="button" onClick={() => applyPhase("paused")} disabled={phase !== "running"}>
-                暂停
+              <button
+                type="button"
+                onClick={() => applyPhase(phase === "paused" ? "running" : "paused")}
+                disabled={phase !== "running" && phase !== "paused"}
+              >
+                {phase === "paused" ? "继续" : "暂停"}
+              </button>
+              <button
+                type="button"
+                onClick={handleStepOnce}
+                disabled={phase !== "paused"}
+                title="推进一个 tick —— 60 Hz 下的 1/60 秒"
+              >
+                单步
               </button>
               <button type="button" onClick={handleReset}>
                 重置
@@ -867,6 +932,26 @@ export function App() {
               <button type="button" onClick={handleToggleMute}>
                 {muted ? "音效：关" : "音效：开"}
               </button>
+            </div>
+
+            {/*
+              Playback rate. Available in every phase, not just while running: it is a
+              setting for the next run as much as a control for this one, and a disabled
+              control that silently changes nothing is worse than an enabled one.
+            */}
+            <div className="panel__speed" role="group" aria-label="播放速度">
+              <span className="panel__speed-label">播放速度</span>
+              {SPEEDS.map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={value === speed ? "is-active" : undefined}
+                  aria-pressed={value === speed}
+                  onClick={() => handleChangeSpeed(value)}
+                >
+                  {value}×
+                </button>
+              ))}
             </div>
           </section>
 

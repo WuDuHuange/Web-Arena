@@ -104,6 +104,38 @@ body {
   gap: 8px;
 }
 
+/*
+ * Playback rate. Deliberately smaller than the session buttons: these are set once and then
+ * left alone, whereas 开战／暂停／单步 are pressed repeatedly.
+ */
+.panel__speed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.panel__speed-label {
+  /* Own line: five rate buttons plus a label do not fit the 244px content column, and a
+     lone wrapped button reads as a mistake rather than as a row. */
+  flex-basis: 100%;
+  margin-bottom: 2px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.panel__speed button {
+  padding: 4px 8px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.panel__speed button.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 button {
   padding: 7px 14px;
   border: 1px solid var(--border);

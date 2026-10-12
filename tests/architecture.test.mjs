@@ -397,3 +397,67 @@ test("identical deployments step identically regardless of frame chunking", () =
     assert.ok(Number.isFinite(entity.motion.velocity.x), `entity ${entity.id} vx must be finite`);
   }
 });
+
+test("settling discards the partial step without counting one", () => {
+  const clock = new FixedStepClock({ fixedStepMs: 10, maxCatchUpSteps: 8 });
+
+  // 7 ms of a 10 ms step: not enough to be due, but enough to be remembered.
+  assert.equal(clock.advance(7), 0);
+  assert.equal(clock.steps, 0);
+  assert.ok(Math.abs(clock.alpha - 0.7) < 1e-9, "the partial step is what alpha reports");
+
+  clock.settle();
+  assert.equal(clock.alpha, 0, "settling parks the clock on a tick boundary");
+  assert.equal(clock.steps, 0, "settling is not a step");
+  assert.equal(clock.droppedMsTotal, 0, "discarding a partial step is not dropped simulated time");
+
+  // The point of settling: the next step runs one step's worth, not a step minus the leftover.
+  assert.equal(clock.advance(10), 1);
+  assert.equal(clock.steps, 0, "advance still does not count steps it has not run");
+});
+
+test("the step button's driver agrees with the frame-delta driver", () => {
+  // Three ways to reach the same tick must produce the same world. The tick-by-tick driver
+  // is the one the step button uses, and it settles the clock first, so this is also the
+  // assertion that settling cannot shift the simulation.
+  const byDelta = new Simulation(deterministicSetup, { maxCatchUpSteps: 1000 });
+  for (let i = 0; i < 100; i += 1) {
+    byDelta.advance(10);
+  }
+
+  const byChunks = new Simulation(deterministicSetup, { maxCatchUpSteps: 1000 });
+  for (let i = 0; i < 20; i += 1) {
+    byChunks.advance(50);
+  }
+
+  const byHand = new Simulation(deterministicSetup, { maxCatchUpSteps: 1000 });
+  for (let i = 0; i < 100; i += 1) {
+    // A partial step left over from a paused frame, to prove settling clears it rather than
+    // letting it accumulate into an extra tick.
+    byHand.advance(4);
+    byHand.stepManually();
+  }
+
+  assert.equal(byDelta.tick, 100);
+  assert.equal(byChunks.tick, 100);
+  assert.equal(byHand.tick, 100, "manual stepping must not gain or lose ticks");
+
+  const a = byDelta.snapshot().entities;
+  const b = byHand.snapshot().entities;
+  assert.equal(a.length, b.length);
+  for (let i = 0; i < a.length; i += 1) {
+    assert.equal(a[i].id, b[i].id, `entity id mismatch at index ${i}`);
+    assert.ok(
+      Math.abs(a[i].transform.position.x - b[i].transform.position.x) < 1e-9,
+      `x mismatch for entity ${a[i].id}`
+    );
+    assert.ok(
+      Math.abs(a[i].transform.position.y - b[i].transform.position.y) < 1e-9,
+      `y mismatch for entity ${a[i].id}`
+    );
+  }
+
+  // And the paused frame really does sit on a boundary afterwards, which is what makes a
+  // tick-at-a-time inspection show a tick rather than an interpolation between two.
+  assert.equal(byHand.alpha, 0);
+});

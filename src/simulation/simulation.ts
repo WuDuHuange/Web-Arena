@@ -117,6 +117,21 @@ export class Simulation {
   }
 
   /**
+   * Advances exactly one tick, discarding any partial step first.
+   *
+   * The driver behind the step button, and the reason it is not just `step()`: while a
+   * battle is paused the clock still holds the fraction of a step that the last frame
+   * accumulated. Stepping without settling would leave that fraction in place, so every
+   * frame the renderer draws would interpolate between two ticks and a tick-at-a-time
+   * inspection would never actually show a tick. The counter is not affected either way —
+   * `step()` owns that — so a stepped sequence and a real-time run agree tick for tick.
+   */
+  stepManually(): void {
+    this.clock.settle();
+    this.step();
+  }
+
+  /**
    * Runs exactly one authoritative fixed step and advances the tick counter.
    *
    * The counter is bumped here rather than in `advance` so that a caller which drives the

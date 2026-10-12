@@ -78,6 +78,19 @@ export class FixedStepClock {
     this.totalSteps += 1;
   }
 
+  /**
+   * Discards the partial step without running it, parking the clock on a tick boundary.
+   *
+   * For a driver that advances by explicit ticks rather than by elapsed time — the step
+   * button — the leftover fraction is not "time already served", it is noise. Left in place
+   * it makes every paused frame render an interpolation *between* two ticks, so stepping
+   * one tick at a time would never actually show a tick. The step counter is untouched:
+   * this is about where the next step starts, not about how many have run.
+   */
+  settle(): void {
+    this.accumulatorMs = 0;
+  }
+
   /** Simulated time discarded by catch-up clamping, in milliseconds. */
   get droppedMsTotal(): number {
     return this.droppedMs;
