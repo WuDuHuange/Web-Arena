@@ -203,16 +203,7 @@ export const CHARACTER_LIBRARY: readonly CharacterDef[] = [
     name: "赤刃",
     abilityIds: ["ability.blade.strike"],
     cost: 2,
-    // The one character whose key resolves to art rather than to the grey box.
-    //
-    // It is `demo-sequence`, a fixture generated at runtime from a canvas, and it is here so
-    // that the appearance pipeline's *success* path is executed by every run of the app
-    // instead of being a branch nobody has ever seen work. An adapter that only ever
-    // exercises its failure path is an adapter that breaks the day the first real asset
-    // arrives. Put the real key here when the art phase starts, and delete the fixture from
-    // `appearance.ts` in the same commit — a test asserts this reference exists, so the
-    // fixture cannot be left behind as an entry nothing draws.
-    appearance: "demo-sequence",
+    appearance: "toon-zombie",
     radius: 13,
     mass: 1.1,
     hp: 90,
@@ -224,7 +215,7 @@ export const CHARACTER_LIBRARY: readonly CharacterDef[] = [
     name: "赤枪",
     abilityIds: ["ability.lancer.thrust"],
     cost: 3,
-    appearance: "red-lancer",
+    appearance: "toon-zombie",
     radius: 13,
     mass: 1.2,
     hp: 80,
@@ -236,7 +227,7 @@ export const CHARACTER_LIBRARY: readonly CharacterDef[] = [
     name: "赤术",
     abilityIds: ["ability.caster.sweep"],
     cost: 3,
-    appearance: "red-caster",
+    appearance: "toon-zombie",
     radius: 12,
     mass: 0.9,
     hp: 70,
@@ -248,7 +239,7 @@ export const CHARACTER_LIBRARY: readonly CharacterDef[] = [
     name: "赤爆",
     abilityIds: ["ability.bomber.burst"],
     cost: 4,
-    appearance: "red-bomber",
+    appearance: "toon-zombie",
     radius: 15,
     mass: 1.8,
     hp: 120,
@@ -266,7 +257,7 @@ export const CHARACTER_LIBRARY: readonly CharacterDef[] = [
     name: "苍锋",
     abilityIds: ["ability.skirmisher.flurry"],
     cost: 2,
-    appearance: "blue-skirmisher",
+    appearance: "toon-robot",
     radius: 12,
     mass: 0.9,
     hp: 76,
@@ -281,7 +272,7 @@ export const CHARACTER_LIBRARY: readonly CharacterDef[] = [
     name: "苍咒",
     abilityIds: ["ability.hexer.lance"],
     cost: 3,
-    appearance: "blue-hexer",
+    appearance: "toon-robot",
     radius: 12,
     mass: 0.95,
     hp: 68,
@@ -293,7 +284,7 @@ export const CHARACTER_LIBRARY: readonly CharacterDef[] = [
     name: "苍啸",
     abilityIds: ["ability.shrieker.wail"],
     cost: 3,
-    appearance: "blue-shrieker",
+    appearance: "toon-robot",
     radius: 13,
     mass: 1,
     hp: 78,
@@ -305,7 +296,7 @@ export const CHARACTER_LIBRARY: readonly CharacterDef[] = [
     name: "苍印",
     abilityIds: ["ability.rune.sigil"],
     cost: 4,
-    appearance: "blue-rune",
+    appearance: "toon-robot",
     radius: 13,
     mass: 1.05,
     hp: 84,

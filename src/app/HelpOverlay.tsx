@@ -279,8 +279,11 @@ export function HelpOverlay({ fixedStepMs, onClose, onDismissForever }: HelpOver
             </li>
             <li>
               <span className="help__swatch help__swatch--none" />
-              <span className="help__name">音效</span>
-              <span className="help__desc">开关合成音效；浏览器需要一次点击才会解锁声音</span>
+              <span className="help__name">声音</span>
+              <span className="help__desc">
+                音效与 BGM 一起开关；浏览器要一次点击才解锁声音，所以音乐在开战时才开始，
+                暂停与分出胜负都不会中断它
+              </span>
             </li>
             <li>
               <span className="help__swatch help__swatch--none" />

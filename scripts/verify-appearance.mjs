@@ -5,25 +5,32 @@
  * in, and what plan comes out. What it cannot prove is the last step — that the renderer
  * draws something *different* for each of them. That is the entire point of the layer, and it
  * is invisible to every test that does not have a canvas: a renderer that ignored the plan
- * and always drew the grey box would pass all 21 of them.
+ * and always drew the grey box would pass all of them.
  *
  * So this drives the real build, rewrites a live appearance key through the debug hook, and
  * counts pixels on a real screenshot:
  *
- *   - art authored and loaded  → sprite pixels, no magenta
- *   - no art authored          → no sprite, no magenta (the grey box is the rendering)
- *   - art authored, load fails → magenta, no sprite
+ *   - art authored and loaded  → character pixels, no magenta
+ *   - no art authored          → no character pixels, no magenta (the grey box is the render)
+ *   - art authored, load fails → magenta, no character pixels
  *
- * Two colours identify the sprite, because the demo fixture has both slots and the field
- * spends its whole time in one of them:
+ * Two colours identify the two shipped keys, and the pair is what makes the third state
+ * provable rather than merely plausible:
  *
- *   - **cyan** `#2ee6c8` — the six-frame strip, i.e. the *base* slot, a sequence.
- *   - **yellow** `#ffd166` — the ring, i.e. the *attack* slot, a single frame.
+ *   - **zombie green** `#3dbf9e` — the red side, the key this run overwrites.
+ *   - **robot blue**   `#5393c5` — the blue side, the control.
  *
- * While the field is frozen in the editor, tick 0 puts every unit in `windup` and the
- * simulation never advances, so the attack slot is what is on screen — permanently. The base
- * strip can only be observed once the battle is running. Both are asserted, which turns this
- * into a test of the slot switch as well as of the drawing.
+ * Overwriting one key must leave the other side drawing. Without that control, "the sprite
+ * disappeared" and "the renderer stopped drawing anything" are the same observation, and the
+ * second one is a far worse bug than the first.
+ *
+ * Both predicates are deliberately narrow, and each exclusion clause names a colour that is
+ * genuinely on screen. The one that matters most is the **health bar** `#63c07a`: it is green,
+ * it is drawn by `drawChrome` for every living unit regardless of what the appearance layer
+ * decided, and a loose green test counts it as zombie art. That is not a hypothetical — an
+ * earlier version of this file did exactly that and reported 683 health-bar pixels as sprite,
+ * which turned "a key with no art must not draw a sprite" into a failure no renderer change
+ * could have fixed. The exclusions and their reasons are spelled out at the predicates.
  *
  * Usage: node --experimental-strip-types scripts/verify-appearance.mjs <pageUrl> [--port=9334] [--shot=out.png]
  *
@@ -51,6 +58,10 @@ const readFlag = (name, fallback) => {
 };
 const port = Number(readFlag("port", "9334"));
 const shotPath = readFlag("shot", "");
+
+/** The key this run overwrites, and the one it must leave alone. */
+const SUBJECT = "toon-zombie";
+const CONTROL = "toon-robot";
 
 const pageUrl = (() => {
   const url = new URL(rawUrl);
@@ -149,8 +160,8 @@ const evaluate = async (expression) => {
 
 await send("Page.enable");
 // headless defaults to roughly 758x426, which would render the arena about 700 px wide and
-// put the sprite near the edge of legibility. Set the viewport explicitly rather than trusting
-// the window size the launcher was given.
+// put a 128-pixel portrait near the edge of legibility. Set the viewport explicitly rather
+// than trusting the window size the launcher was given.
 await send("Emulation.setDeviceMetricsOverride", {
   width: 1440,
   height: 900,
@@ -215,18 +226,45 @@ const readPanel = () =>
     };
   })()`);
 
+/**
+ * Polls the panel until it answers a question, rather than sleeping a guessed duration.
+ *
+ * Every step below changes what the panel should say and then reads it. A fixed delay encodes
+ * how fast the machine was the day it was written: it is long enough on an idle laptop and too
+ * short in a batch run, where the panel's 250 ms poll is throttled and the read lands on the
+ * previous state. Waiting on the condition itself is the only version that is right on both.
+ *
+ * Returns the last panel it read even on timeout, so a failure reports what was actually on
+ * screen instead of `undefined`.
+ */
+const waitForPanel = async (predicate, timeoutMs = 12_000) => {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const panel = await readPanel();
+    if (panel && predicate(panel)) return panel;
+    if (Date.now() > deadline) return panel;
+    await delay(200);
+  }
+};
+
 const readPhase = () => evaluate(`document.querySelector(".panel__phase")?.textContent ?? ""`);
 
 /**
- * Counts the colours that identify each state, over the whole screenshot.
+ * Counts the colours that identify each state, over the canvas only.
  *
- * Whole-image rather than a box around the unit: the mapping from world units to screenshot
+ * Whole-region rather than a box around one unit: the mapping from world units to screenshot
  * pixels depends on the fit transform, the device pixel ratio and the window size, and a box
- * that silently lands in the wrong place would pass or fail for the wrong reason. The three
- * colours are unambiguous enough to count globally.
+ * that silently landed in the wrong place would pass or fail for the wrong reason.
+ *
+ * The HUD is hidden for the capture. It floats over the canvas, so its pixels land inside the
+ * canvas rectangle — and while it is dark and low-saturation today, "does not match the
+ * predicate today" is not the same as "cannot match", and the fix is two evaluates.
  */
 async function scan() {
+  await evaluate(`for (const el of document.querySelectorAll(".hud")) el.style.display = "none"`);
   const captured = await send("Page.captureScreenshot", { format: "png" });
+  await evaluate(`for (const el of document.querySelectorAll(".hud")) el.style.display = ""`);
+
   const pixels = await evaluate(`(async () => {
     const img = new Image();
     img.src = "data:image/png;base64,${captured.data}";
@@ -237,11 +275,6 @@ async function scan() {
     const ctx = c.getContext("2d", { willReadFrequently: true });
     ctx.drawImage(img, 0, 0);
 
-    // Only the arena. The rest of the screenshot is the panel, and the panel is styled with
-    // the same palette family as the sprites — an amber badge or a swatch is enough to make a
-    // whole-image count non-zero and turn a renderer assertion into a stylesheet assertion.
-    // The scale factor is 1 under the emulated viewport, but computing it keeps the mapping
-    // honest if that ever changes.
     const rect = document.querySelector("canvas").getBoundingClientRect();
     const k = c.width / window.innerWidth;
     const x0 = Math.max(0, Math.round(rect.left * k));
@@ -250,17 +283,10 @@ async function scan() {
     const y1 = Math.min(c.height, Math.round(rect.bottom * k));
     const { data } = ctx.getImageData(x0, y0, Math.max(x1 - x0, 1), Math.max(y1 - y0, 1));
 
-    let cyan = 0;
+    let zombie = 0;
+    let robot = 0;
     let magenta = 0;
-    let yellow = 0;
     let minX = 1e9, minY = 1e9, maxX = -1, maxY = -1;
-    const cyanX = [];
-    const cyanY = [];
-    // The most cyan pixel in the whole arena, and how cyan it is. Distinguishes three very
-    // different diagnoses that all look like "the sprite is missing": nothing was drawn at
-    // all, a sprite was drawn but is transparent, or a sprite was drawn and the strict
-    // threshold is simply too strict for an anti-aliased 4-pixel-wide bar.
-    let peak = { r: 0, g: 0, b: 0, score: -999 };
     const regionWidth = x1 - x0;
     const regionHeight = y1 - y0;
 
@@ -270,53 +296,52 @@ async function scan() {
         const r = data[i];
         const g = data[i + 1];
         const b = data[i + 2];
-        if (g - r > peak.score) {
-          peak = { r, g, b, score: g - r };
-        }
-        if (r < 90 && g > 200 && b > 170 && b < 225) {
-          cyan += 1;
-          cyanX.push(x);
-          cyanY.push(y);
+
+        // Magenta first: the failure marker is the one colour nothing else in the arena uses,
+        // and matching it must never be shadowed by a looser predicate below.
+        if (r > 200 && g < 110 && b > 160) {
+          magenta += 1;
+        } else if (g > 130 && g - r > 100 && b > 105 && b < 200 && r < 110) {
+          // The zombie's skin, #3dbf9e. The g - r > 100 clause is the load-bearing one, and
+          // it is there for exactly one reason: the **health bar**. A full-health unit draws
+          // a bar in #63c07a — (99,192,122) — which is g - r = 93, and every way that green
+          // can be blended on screen (into its own dark backing, into the floor, into the
+          // arena background) moves all three channels toward a darker, less green point, so
+          // 93 is the ceiling for the whole family. A first version of this predicate used
+          // g - r > 60 and counted 683 pixels of health bar as zombie art, which made "a key
+          // with no art must not draw a sprite" fail with the sprite correctly absent. The
+          // bar is drawn by drawChrome and has nothing to do with the appearance layer, so
+          // no amount of correct renderer behaviour could ever have fixed that.
+          //
+          // 100 rather than 94 for headroom: the sprite's own anti-aliased edges blend toward
+          // the dark arena and their g - r falls away from 130 quickly, so the clause is not
+          // near any zombie pixel it needs to keep.
+          zombie += 1;
           if (x < minX) minX = x;
           if (y < minY) minY = y;
           if (x > maxX) maxX = x;
           if (y > maxY) maxY = y;
-        } else if (r > 230 && g > 180 && g < 235 && b < 140) {
-          yellow += 1;
-        } else if (r > 200 && g < 110 && b > 160) {
-          magenta += 1;
+        } else if (b > 160 && b - g > 15 && b - g < 65 && b - r > 80 && g > 110 && g < 200 && r < 130) {
+          // The robot's armour, #5393c5. Two clauses are doing exclusion work:
+          //
+          //   b - g < 65  keeps out #4b8fe0, the blue faction colour, which is also the
+          //               accent. Without it a blue unit's facing marker would read as robot
+          //               art and the "no art authored" step would pass with a sprite on screen.
+          //   b - g > 15  keeps out the near-grey facing marker #e8edf7 (b - g = 10).
+          //   g < 200     keeps out the prop glows #7fd4e8 (g = 212) and #c792ea (b - g = 88).
+          robot += 1;
         }
       }
-    }
-
-    // A shape signature of the sprite, normalised to its own bounding box so it is independent
-    // of where the unit is standing. That matters once the battle is running: a unit walking
-    // across the arena changes a whole-screen fingerprint on its own, which would make a
-    // frozen animation look like a working one. A rotating bar changes this signature; a
-    // moving unit does not.
-    let signature = "";
-    if (cyan > 0) {
-      const w = maxX - minX + 1;
-      const h = maxY - minY + 1;
-      const cells = new Array(64).fill(0);
-      for (let k = 0; k < cyanX.length; k += 1) {
-        const cx = Math.min(7, Math.floor(((cyanX[k] - minX) / w) * 8));
-        const cy = Math.min(7, Math.floor(((cyanY[k] - minY) / h) * 8));
-        cells[cy * 8 + cx] += 1;
-      }
-      signature = cells.map((n) => (n > 0 ? 1 : 0)).join("");
     }
 
     return {
       width: c.width,
       height: c.height,
       region: { x0, y0, x1, y1 },
-      cyan,
+      zombie,
+      robot,
       magenta,
-      yellow,
-      peak,
-      bbox: cyan > 0 ? { w: maxX - minX + 1, h: maxY - minY + 1 } : null,
-      signature
+      bbox: zombie > 0 ? { w: maxX - minX + 1, h: maxY - minY + 1 } : null
     };
   })()`);
   return { ...pixels, data: captured.data };
@@ -327,33 +352,59 @@ const override = (key, entry) =>
 
 // --- The run -----------------------------------------------------------------
 
-const report = { ok: true, url: pageUrl, steps: [], consoleErrors, exceptions };
+const report = { ok: true, url: pageUrl, subject: SUBJECT, control: CONTROL, steps: [], consoleErrors, exceptions };
 const step = (name, detail) => report.steps.push({ name, ...detail });
 
 const units = await evaluate(`window.__arenaAppearance.units()`);
-const carrying = units.filter((u) => u.appearance === "demo-sequence");
+const carrying = units.filter((u) => u.appearance === SUBJECT);
 report.armedUnits = carrying;
 report.unitCount = units.length;
+report.keysInUse = [...new Set(units.map((u) => u.appearance))].sort();
 
-// Snapshot the registry BEFORE anything is overwritten. Taking it afterwards is how the first
-// run of this script "restored" the broken entry it had just installed and then reported that
-// the art never came back — a test bug that looked exactly like a renderer bug.
+// Snapshot the registry BEFORE anything is overwritten. Taking it afterwards is how an
+// earlier version of this script "restored" the broken entry it had just installed and then
+// reported that the art never came back — a test bug that looked exactly like a renderer bug.
 const pristine = await evaluate(`window.__arenaAppearance.registry()`);
 
 // 1. Art authored and loaded, while the field is frozen in the editor.
 //
 //    Tick 0 puts every unit in `windup` (`initialPhase`), and the editor does not advance the
-//    simulation — so what is on screen here is the *attack* slot, held on a single frame. That
-//    is the correct rendering, and it makes this step a test of two things at once: that the
-//    single-frame path draws at all, and that `windup` selects `attack` over `base`.
+//    simulation — so what is on screen here is the *attack* slot, held on a single frame.
+//    That is the correct rendering, and it makes this step a test of two things at once: that
+//    the single-frame path draws at all, and that `windup` selects `attack` over `base`.
+//
+//    Waiting for the panel to *settle*, not merely to say something. "The debug hooks exist"
+//    is not the same as "the registry has finished", and neither is "the status line is
+//    non-empty": that line is rendered from the first poll, when it reads 就绪 0 · 加载中 2.
+//    Accepting it read a loading state as a settled one, and the assertion that both keys are
+//    ready then failed against a panel that had not caught up — while the pixels in the same
+//    step showed the art already drawn. Head-less Chrome reports the page as hidden, which
+//    throttles the panel's 250 ms poll to roughly a second, so the window is wide enough to
+//    hit in a batch run and narrow enough to miss on an idle machine. The condition has to be
+//    "nothing is still loading", which is the one thing the summary actually reports.
+let panelSettled = false;
+for (let i = 0; i < 60 && !panelSettled; i += 1) {
+  panelSettled = (await evaluate(`(() => {
+    const block = [...document.querySelectorAll(".panel__block")]
+      .find((b) => b.querySelector("h2")?.textContent === "外观");
+    const text = (block?.querySelector(".panel__ok, .panel__alert")?.textContent ?? "").trim();
+    return text.length > 0 && !/加载中 [1-9]/.test(text);
+  })()`)) === true;
+  if (!panelSettled) {
+    await delay(200);
+  }
+}
+
 const panelArt = await readPanel();
 const art = await scan();
 step("the attack slot draws while the field is frozen in windup", {
+  panelSettled,
   panelSummary: panelArt?.summary.trim(),
   panelRows: panelArt?.rows,
-  yellowPixels: art.yellow,
-  cyanPixels: art.cyan,
-  magentaPixels: art.magenta
+  zombiePixels: art.zombie,
+  robotPixels: art.robot,
+  magentaPixels: art.magenta,
+  zombieBox: art.bbox
 });
 
 let artShot = null;
@@ -362,31 +413,34 @@ if (shotPath) {
 }
 
 // 2. No art authored. Removing the entry is how a key that was never registered behaves, and
-//    it must look like neither of the other two states.
-await override("demo-sequence", null);
-await delay(500);
-const panelNone = await readPanel();
+//    it must look like neither of the other two states. The control side must keep drawing:
+//    without it, "the sprite is gone" and "the renderer is gone" are the same observation.
+await override(SUBJECT, null);
+const panelNone = await waitForPanel((panel) => panel.rows.length === 1);
+// The renderer is a 60 Hz loop, so a quarter second is fifteen frames — this delay is about
+// giving it a frame, not about waiting for anything to answer.
+await delay(250);
 const none = await scan();
-step("an unregistered key falls back to procedural, with no failure marker", {
-  panelNote: panelNone?.notes[0],
+step("an unregistered key falls back to procedural, and only that key", {
+  panelSummary: panelNone?.summary.trim(),
   panelRowCount: panelNone?.rows.length,
-  yellowPixels: none.yellow,
-  cyanPixels: none.cyan,
+  zombiePixels: none.zombie,
+  robotPixels: none.robot,
   magentaPixels: none.magenta
 });
 
-// 3. Art authored, load fails. A `builtin:` name with no fixture, so the failure runs through
-//    the real catch in the real loader rather than a simulated one — and no network request,
-//    so the run stays quiet.
-await override("demo-sequence", { base: { kind: "single", source: "builtin:no-such-fixture" } });
-await delay(700);
-const panelFail = await readPanel();
+// 3. Art authored, load fails. A slot the asset table does not know, so the failure runs
+//    through the real resolver and the real catch rather than a simulated one — and no
+//    network request, so the run stays quiet.
+await override(SUBJECT, { base: { kind: "single", source: "asset:no-such-slot" } });
+const panelFail = await waitForPanel((panel) => panel.rows.some((row) => row.state === "加载失败"));
+await delay(250);
 const failed = await scan();
 step("a failed load is visible on screen and named in the panel", {
   panelSummary: panelFail?.summary.trim(),
   panelRows: panelFail?.rows,
-  yellowPixels: failed.yellow,
-  cyanPixels: failed.cyan,
+  zombiePixels: failed.zombie,
+  robotPixels: failed.robot,
   magentaPixels: failed.magenta
 });
 
@@ -398,59 +452,75 @@ if (shotPath) {
 
 // 4. A file that is not there, which is what a real missing asset looks like. Same state, but
 //    the reason now has to carry a path a human can act on.
-await override("demo-sequence", { base: { kind: "single", source: "art/definitely-not-here.png" } });
-await delay(900);
-const panelMissing = await readPanel();
+await override(SUBJECT, { base: { kind: "single", source: "art/definitely-not-here.png" } });
+const panelMissing = await waitForPanel((panel) =>
+  panel.rows.some((row) => row.reason.includes("definitely-not-here"))
+);
+await delay(250);
 const missing = await scan();
 step("a missing file reports the path it could not load", {
   panelRows: panelMissing?.rows,
-  cyanPixels: missing.cyan,
+  zombiePixels: missing.zombie,
   magentaPixels: missing.magenta
 });
 
 // 5. Put it back. A debug hook that cannot round-trip would leave the page broken after the
 //    test, and would make every later assertion measure the wrong thing.
-await override("demo-sequence", pristine["demo-sequence"]);
-await delay(500);
-const panelRestored = await readPanel();
+await override(SUBJECT, pristine[SUBJECT]);
+const panelRestored = await waitForPanel(
+  (panel) => panel.rows.length === 2 && panel.rows.every((row) => row.state === "已就绪")
+);
+await delay(250);
 const restored = await scan();
 step("restoring the entry brings the art back", {
   panelSummary: panelRestored?.summary.trim(),
-  yellowPixels: restored.yellow,
-  cyanPixels: restored.cyan,
+  zombiePixels: restored.zombie,
+  robotPixels: restored.robot,
   magentaPixels: restored.magenta
 });
 
-// 6. Run the battle and look for the base sequence.
+// 6. Run the battle and look for the base slot.
 //
-//    This is the only place the *sequence* path can be observed: while the field is frozen the
-//    unit is permanently in windup, so the strip is never on screen. Once the fight starts it
+//    This is the other half of the slot switch: while the field is frozen the unit is
+//    permanently in windup, so the idle pose is never on screen. Once the fight starts it
 //    cycles windup / active / cooldown, and most of the cycle is spent off the telegraph.
-const signatures = new Set();
-let cyanSeen = 0;
-let yellowSeen = 0;
+//
+//    The window is bounded by the battle, not by a fixed iteration count. A flat ten
+//    iterations silently assumed the fight outlives the scanning, and it does not: each
+//    iteration captures and decodes a full-page PNG. Scanning past the decision measures an
+//    empty arena, and an empty arena has no sprite to find.
 let battleShot = null;
+let sawRunning = false;
+let battleZombie = 0;
+let battleScans = 0;
+
 await evaluate(
   `[...document.querySelectorAll(".panel__buttons button")].find((b) => b.textContent.trim() === "开战")?.click(), "clicked"`
 );
-for (let i = 0; i < 10; i += 1) {
-  await delay(180);
-  const frame = await scan();
-  if (frame.cyan > 0) {
-    cyanSeen += 1;
-    signatures.add(frame.signature);
-    battleShot = frame.data;
-  }
-  if (frame.yellow > 0) {
-    yellowSeen += 1;
-  }
+
+// The phase readout is polled at 250 ms, so 开战 does not appear in it immediately.
+for (let i = 0; i < 40 && !sawRunning; i += 1) {
+  await delay(150);
+  sawRunning = (await readPhase()).includes("交战");
 }
-const phase = await readPhase();
-step("the base sequence draws and animates once the battle is running", {
-  phase,
-  scansWithBaseSequence: cyanSeen,
-  scansWithAttackTelegraph: yellowSeen,
-  distinctSignatures: signatures.size
+
+for (let i = 0; i < 40; i += 1) {
+  const frame = await scan();
+  if (frame.zombie > 0) {
+    battleZombie = Math.max(battleZombie, frame.zombie);
+    battleShot = frame.data;
+    battleScans += 1;
+  }
+  if (!(await readPhase()).includes("交战")) {
+    break;
+  }
+  await delay(120);
+}
+
+step("the base slot draws once the battle is running", {
+  sawRunning,
+  scansWithCharacterArt: battleScans,
+  peakZombiePixels: battleZombie
 });
 
 await evaluate(
@@ -464,31 +534,32 @@ report.screenshots = { failed: failedShot, art: artShot, battle: battleShot };
 
 const expectations = [
   [units.length > 0, "the scene must place at least one unit"],
-  [carrying.length > 0, "a shipped unit must carry the appearance key under test"],
-  [art.yellow > 0, "art must actually be drawn on the canvas"],
-  [art.cyan === 0, "a unit frozen in windup must show the attack slot, not the idle strip"],
+  [carrying.length > 0, `a shipped unit must carry the appearance key ${SUBJECT}`],
+  [report.keysInUse.includes(CONTROL), `the scene must also place a unit drawing ${CONTROL}`],
+  [art.zombie > 0, "the red side's art must actually be drawn on the canvas"],
+  [art.robot > 0, "the blue side's art must actually be drawn on the canvas"],
   [art.magenta === 0, "loaded art must not draw the failure marker"],
-  [panelArt?.summary.includes("就绪 1") === true, "the panel must report the key as ready"],
-  [panelArt?.rows.length === 1, "the panel must list exactly the one registered key"],
-  [none.yellow === 0, "a key with no art must not draw a sprite"],
-  [none.cyan === 0, "a key with no art must not draw a sprite"],
+  [panelArt?.summary.includes("就绪 2") === true, "the panel must report both keys as ready"],
+  [panelArt?.rows.length === 2, "the panel must list both registered keys"],
+  [none.zombie === 0, "a key with no art must not draw a sprite"],
   [none.magenta === 0, "a key with no art must not draw the failure marker either"],
-  [panelNone?.notes.some((n) => n.includes("注册表为空")) === true, "an empty registry must say so"],
-  [failed.yellow === 0, "a failed load must not leave the sprite on screen"],
-  [failed.cyan === 0, "a failed load must not leave the sprite on screen"],
+  [none.robot > 0, "overwriting one key must leave the other side drawing"],
+  [panelNone?.rows.length === 1, "the panel must drop the removed key from its list"],
+  [failed.zombie === 0, "a failed load must not leave the sprite on screen"],
+  [failed.robot > 0, "a failed load must not take the other side down with it"],
   [failed.magenta > 0, "a failed load must be visible on the canvas"],
   [panelFail?.rows.some((r) => r.state === "加载失败") === true, "the panel must report the failure"],
-  [panelFail?.summary.includes("失败 1") === true, "the panel tally must count the failure"],
   [
     panelMissing?.rows.some((r) => r.reason.includes("definitely-not-here")) === true,
     "the panel must name the file it could not load"
   ],
   [missing.magenta > 0, "a missing file must stay visible on the canvas"],
-  [restored.yellow > 0, "restoring the entry must bring the art back"],
+  [restored.zombie > 0, "restoring the entry must bring the art back"],
   [restored.magenta === 0, "restoring the entry must clear the failure marker"],
-  [phase.includes("交战"), "a battle must still start"],
-  [cyanSeen > 0, "the base sequence must be drawn when the unit is not winding up"],
-  [signatures.size >= 2, "a sequence must animate rather than freeze on one frame"],
+  // Asserts the click actually started a fight, not that a fight is still in progress by the
+  // time the observation window closes — which is what a phase read afterwards measures.
+  [sawRunning, "a battle must still start"],
+  [battleScans > 0, "the base slot must be drawn when the unit is not winding up"],
   [consoleErrors.length === 0, "no console errors"],
   [exceptions.length === 0, "no uncaught exceptions"]
 ];

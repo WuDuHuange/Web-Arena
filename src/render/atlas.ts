@@ -1,4 +1,5 @@
 import { Assets, Rectangle, Texture } from "pixi.js";
+import { CHARACTER_ART } from "../assets/index.ts";
 import { APPEARANCE_REGISTRY, registrySources } from "../content/appearance.ts";
 import type { AppearanceSpec, AppearanceStatus } from "../content/appearance.ts";
 
@@ -15,8 +16,32 @@ import type { AppearanceSpec, AppearanceStatus } from "../content/appearance.ts"
  * absent sprite.
  */
 
-/** Sources under this scheme are generated from a canvas and ship no bytes. */
-const BUILTIN_PREFIX = "builtin:";
+/** Sources under this scheme name a slot in the asset table rather than holding a URL. */
+const ASSET_PREFIX = "asset:";
+
+/**
+ * Turns a spec's source into a URL the loader can fetch.
+ *
+ * `asset:` names a slot, which is the only way a spec can refer to a file without holding its
+ * hashed path — `content/appearance.ts` imports nothing by contract, so it cannot read the
+ * glob itself. Anything else is already a URL and is passed through untouched, which is what
+ * keeps the debug override able to point a key at a file that is not there.
+ *
+ * Throws rather than returning an empty string. An empty URL makes the loader fetch the page
+ * itself, and the sprite then decodes an HTML document — a failure that surfaces as a texture
+ * error naming nothing. The throw lands in `load`'s catch and becomes a named, on-screen
+ * reason, which is the whole contract of this layer.
+ */
+const resolveSource = (source: string): string => {
+  if (!source.startsWith(ASSET_PREFIX)) {
+    return source;
+  }
+  const url = CHARACTER_ART[source.slice(ASSET_PREFIX.length)];
+  if (!url) {
+    throw new Error(`未知的素材槽 ${source}`);
+  }
+  return url;
+};
 
 interface SourceState {
   status: AppearanceStatus;
@@ -76,53 +101,6 @@ export function createAppearanceAtlas(): AppearanceAtlas {
   const statusOf = (source: string): AppearanceStatus =>
     sources.get(source)?.status ?? { state: "pending" };
 
-  /**
-   * Generates a fixture texture with a 2D canvas.
-   *
-   * Two fixtures exist and both are temporary: they ship no bytes and carry no licence, and
-   * they are here for exactly one reason. An adapter whose success path never runs is an
-   * adapter nobody has tested, and the alternative — shipping the code and hoping the first
-   * real asset works — is how a pipeline reaches the art phase broken.
-   */
-  const generate = (source: string): Texture => {
-    if (source === "builtin:demo-walk") {
-      // Six frames of a 32x32 strip: a bar rotating around the cell, so a stalled animation
-      // is visible as a frozen bar rather than as an ambiguous blob.
-      return fromCanvas(32 * 6, 32, (ctx) => {
-        for (let i = 0; i < 6; i += 1) {
-          const cx = i * 32 + 16;
-          const cy = 16;
-          ctx.save();
-          ctx.translate(cx, cy);
-          ctx.rotate((i / 6) * Math.PI * 2);
-          ctx.fillStyle = "#2ee6c8";
-          ctx.fillRect(-2, -11, 4, 22);
-          ctx.restore();
-          ctx.beginPath();
-          ctx.arc(cx, cy, 4, 0, Math.PI * 2);
-          ctx.fillStyle = "#0f6f61";
-          ctx.fill();
-        }
-      });
-    }
-
-    if (source === "builtin:demo-attack") {
-      return fromCanvas(32, 32, (ctx) => {
-        ctx.beginPath();
-        ctx.arc(16, 16, 13, 0, Math.PI * 2);
-        ctx.strokeStyle = "#ffd166";
-        ctx.lineWidth = 4;
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(16, 16, 5, 0, Math.PI * 2);
-        ctx.fillStyle = "#fff3c4";
-        ctx.fill();
-      });
-    }
-
-    throw new Error(`未知的内置外观：${source}`);
-  };
-
   const load = async (source: string): Promise<void> => {
     const state = stateOf(source);
     // Already settled. A failed source is not retried on every frame: the failure is shown
@@ -131,9 +109,7 @@ export function createAppearanceAtlas(): AppearanceAtlas {
       return;
     }
     try {
-      const texture = source.startsWith(BUILTIN_PREFIX)
-        ? generate(source)
-        : ((await Assets.load(source)) as Texture);
+      const texture = (await Assets.load(resolveSource(source))) as Texture;
       state.texture = texture;
       state.status = { state: "ready" };
     } catch (error) {
@@ -219,17 +195,4 @@ export function createAppearanceAtlas(): AppearanceAtlas {
       inflight.clear();
     }
   };
-}
-
-/** Draws into an offscreen canvas and hands the result to Pixi as a texture. */
-function fromCanvas(width: number, height: number, paint: (ctx: CanvasRenderingContext2D) => void): Texture {
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
-    throw new Error("无法创建 2D 画布上下文");
-  }
-  paint(ctx);
-  return Texture.from(canvas);
 }

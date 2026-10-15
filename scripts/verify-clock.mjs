@@ -5,6 +5,15 @@
  * wired to it, which is the part that actually broke here: `settle()` can be perfect and
  * the step button can still be calling `advance()`.
  *
+ * Three things, all of them wiring:
+ *
+ *   1. 单步 advances exactly one tick, and a paused battle does not drift.
+ *   2. The rate control changes the rate, and 1× lands between 0.25× and 4×.
+ *   3. A hidden page pauses the fight and looking again resumes it — but a pause the operator
+ *      asked for survives the round trip. The policy is unit-tested in
+ *      `tests/attention.test.mjs`; what cannot be tested there is that the listener is
+ *      installed at all, which is exactly the failure that would ship silently.
+ *
  * Runs against the dev server rather than a production build on purpose. A preview server
  * serves `dist/`, and a build that silently failed leaves `dist/` holding the previous
  * version — the verifier then passes while testing code that no longer exists. The dev
@@ -309,6 +318,61 @@ try {
 
   // Guard against the measurement window silently outliving the battle.
   check((await phaseText()) !== "已分胜负", "测量期间不应分出胜负，否则速率读数无意义");
+
+  // --- Losing sight of the page pauses the fight ----------------------------
+
+  /**
+   * Drives the visibility API instead of waiting for it.
+   *
+   * Head-less Chrome reports `document.visibilityState` as "hidden" on its own, which makes
+   * the *pause* direction trivial to trigger and the *resume* direction impossible — so the
+   * two properties are redefined for the duration. This is the one place in the suite where a
+   * browser API is faked, and it is faked because there is no honest way to look away: the
+   * assertion here is about the **listener**, and the policy behind it is unit-tested.
+   *
+   * The `hidden` getter lives on `Document.prototype`, so defining it on the instance shadows
+   * it without touching anything else on the page.
+   */
+  const setVisibility = async (value) => {
+    await evaluate(`(() => {
+      Object.defineProperty(document, "visibilityState", { value: ${JSON.stringify(value)}, configurable: true });
+      Object.defineProperty(document, "hidden", { value: ${value === "visible" ? "false" : "true"}, configurable: true });
+      document.dispatchEvent(new Event("visibilitychange"));
+      return document.visibilityState;
+    })()`);
+    await delay(400);
+  };
+
+  await ensurePaused();
+  await click("继续");
+  check((await phaseText()) === "交战中", "切出页面之前应先处于交战中");
+
+  const visibleBefore = await settledTick();
+  await setVisibility("hidden");
+  const hiddenPhase = await phaseText();
+  check(hiddenPhase === "已暂停", `切出页面应暂停，实得 ${hiddenPhase}`);
+
+  // Read *after* the pause has settled, for the same reason `settledTick` exists: the panel
+  // polls at 250 ms, so a reading taken at the instant of the transition is up to a quarter
+  // of a second stale. Comparing that against a later reading would measure ticks that ran
+  // while the battle was still running, and report them as drift under a pause.
+  const hiddenFrom = await settledTick();
+  await delay(700);
+  const hiddenTo = await tick();
+  check(hiddenTo === hiddenFrom, `切出页面后 tick 不应推进：${hiddenFrom} → ${hiddenTo}`);
+
+  await setVisibility("visible");
+  const backPhase = await phaseText();
+  check(backPhase === "交战中", `回到页面应自动继续，实得 ${backPhase}`);
+
+  // The case that matters most: a pause the operator asked for is not the page's to undo.
+  await click("暂停");
+  await setVisibility("hidden");
+  await setVisibility("visible");
+  const keptPhase = await phaseText();
+  check(keptPhase === "已暂停", `手动暂停不应被切出/切回页面撤销，实得 ${keptPhase}`);
+
+  notes.push({ autoPause: { tickBeforeHiding: visibleBefore, hiddenPhase, hiddenFrom, hiddenTo, backPhase, keptPhase } });
 
   // A screenshot is the only evidence that the controls are laid out sensibly; no DOM
   // assertion can see a button that wrapped onto its own line.

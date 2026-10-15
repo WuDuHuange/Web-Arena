@@ -78,6 +78,21 @@ export interface Projector {
    */
   depth(x: number, y: number): number;
   /**
+   * Which way a world-space heading points on screen, as a sign: `-1` is left.
+   *
+   * A billboard is drawn square to the camera, so a world angle has no direct screen meaning;
+   * what the renderer needs is only the left/right half of it, and that half is a property of
+   * the projection rather than of the angle. Under the flat view a heading points right when
+   * its `cos` is positive. Under the isometric view screen `x` is `(x - y) * k`, so the same
+   * heading points right when `cos - sin` is positive — and a unit walking "north-east" in
+   * world space is drawn walking straight up the screen, a heading whose art must not flip
+   * halfway across the arena.
+   *
+   * The sign is computed here rather than by the renderer because the projection is what
+   * decides it, and the renderer has no business knowing which projection is in force.
+   */
+  horizontalSign(angle: number): -1 | 1;
+  /**
    * Whether the renderer should honour `depth`.
    *
    * False for flat. The existing flat renderer draws in creation order and is verified
@@ -116,6 +131,8 @@ function flatProjector(options: ProjectionOptions): Projector {
     project: (x, y) => ({ x, y }),
     unproject: (x, y) => ({ x, y }),
     depth: (_x, y) => y,
+    // Screen x is world x, so the heading's own cosine is the whole answer.
+    horizontalSign: (angle) => (Math.cos(angle) >= 0 ? 1 : -1),
     sortable: false,
     matrix: () => ({ a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 }),
     projectedExtent: () => ({ width: options.width, height: options.height })
@@ -147,6 +164,10 @@ function isoProjector(options: ProjectionOptions): Projector {
       return { x: (sum + difference) / 2, y: (sum - difference) / 2 };
     },
     depth: (x, y) => x + y,
+    // Screen x is `(x - y) * ISO_SCALE + offsetX`, so a heading's screen component is
+    // `cos - sin`. The same expression `project` uses, with the direction in place of the
+    // position, which is why the two can never disagree about which way is right.
+    horizontalSign: (angle) => (Math.cos(angle) - Math.sin(angle) >= 0 ? 1 : -1),
     sortable: true,
     matrix: () => ({
       a: ISO_SCALE,

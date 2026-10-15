@@ -29,8 +29,11 @@ import {
   APPEARANCE_REGISTRY,
   PHASE_STEP_MS,
   PLACEHOLDER_COLOR,
+  anchorOf,
+  artHeight,
   findAppearanceProblems,
   frameAt,
+  mirrorsFacing,
   overrideAppearance,
   phaseOffsetMs,
   planAppearance,
@@ -207,10 +210,97 @@ test("the base and attack slots are asked about separately", () => {
   }
 });
 
+// --- Placement --------------------------------------------------------------
+
+test("an anchor defaults to the centre and is copied rather than shared", () => {
+  const bare = { kind: "single", source: "test/one.png" };
+  assert.deepEqual(anchorOf(bare), { x: 0.5, y: 0.5 });
+
+  const pinned = { kind: "single", source: "test/one.png", anchor: { x: 0.5, y: 1 } };
+  assert.deepEqual(anchorOf(pinned), { x: 0.5, y: 1 });
+
+  // A PixiJS anchor is a live point, so two calls must not hand back the same object: one
+  // unit writing to it would move every other unit that never named an anchor at all.
+  assert.notEqual(anchorOf(bare), anchorOf(bare), "the default anchor must be copied, not shared");
+});
+
+test("a spec without a height draws at its own size", () => {
+  // Scale 1 is what every spec did before this field existed, so its absence has to keep
+  // producing it — otherwise adding the field silently resizes the whole greybox era.
+  assert.equal(artHeight({ kind: "single", source: "x.png" }, 128), 128);
+  assert.equal(artHeight({ kind: "single", source: "x.png", height: 48 }, 128), 48);
+});
+
+test("a degenerate height is ignored rather than honoured", () => {
+  // Honouring any of these scales the sprite away to nothing, and a unit that vanishes with
+  // nothing logged is the exact failure this module exists to make impossible.
+  for (const height of [0, -10, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.equal(
+      artHeight({ kind: "single", source: "x.png", height }, 128),
+      128,
+      `height ${height} must fall back to the natural size`
+    );
+  }
+});
+
+test("only the mirror facing asks for a flip", () => {
+  assert.equal(mirrorsFacing({ kind: "single", source: "x.png" }), false);
+  assert.equal(mirrorsFacing({ kind: "single", source: "x.png", facing: "none" }), false);
+  assert.equal(mirrorsFacing({ kind: "single", source: "x.png", facing: "mirror" }), true);
+});
+
+test("registry problems reach the placement fields too", () => {
+  const problems = findAppearanceProblems({
+    bad: {
+      base: {
+        kind: "single",
+        source: "x.png",
+        anchor: { x: 1.5, y: -0.2 },
+        height: 0,
+        facing: "sideways"
+      }
+    }
+  });
+
+  assert.equal(problems.length, 3, `expected three problems, got ${JSON.stringify(problems)}`);
+  assert.ok(problems.some((p) => p.includes("anchor")));
+  assert.ok(problems.some((p) => p.includes("height")));
+  assert.ok(problems.some((p) => p.includes("facing")));
+});
+
 // --- Registry integrity -----------------------------------------------------
 
 test("the shipped appearance registry is clean", () => {
   assert.deepEqual(findAppearanceProblems(), []);
+});
+
+test("the shipped registry pins every portrait by its feet", () => {
+  // The pack's opaque bounding boxes all end on the last row of the frame, so `y: 1` is where
+  // the boots are. Anchored at the centre instead, a 128-pixel figure floats half its own
+  // height above the floor — and no amount of depth sorting fixes that.
+  for (const [key, entry] of Object.entries(APPEARANCE_REGISTRY)) {
+    for (const spec of [entry.base, entry.attack]) {
+      if (!spec) {
+        continue;
+      }
+      assert.equal(spec.anchor?.y, 1, `${key} must be pinned by its feet`);
+      assert.ok(spec.height > 0, `${key} must state a world-unit height`);
+    }
+  }
+});
+
+test("the shipped registry names asset slots rather than literal paths", () => {
+  // A spec holding a path would break the moment Vite hashed the file, and it would break at
+  // 404 time rather than at build time. `asset:` is the scheme that survives the hashing; the
+  // lookup that turns a slot into a URL belongs to `assets/index.ts`, not to content.
+  for (const [key, entry] of Object.entries(APPEARANCE_REGISTRY)) {
+    for (const spec of [entry.base, entry.attack]) {
+      if (!spec) {
+        continue;
+      }
+      assert.match(spec.source, /^asset:/, `${key} must name an asset slot`);
+    }
+  }
 });
 
 test("registry problems name the key, the slot and the field", () => {

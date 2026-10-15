@@ -1,9 +1,11 @@
-import { Application, Container, Graphics, Matrix, Point, Sprite } from "pixi.js";
-import { planAppearance, phaseOffsetMs } from "../content/appearance.ts";
+import { Application, Assets, Container, Graphics, Matrix, Point, Sprite, Texture } from "pixi.js";
+import { GROUND_TEXTURE_URL } from "../assets/index.ts";
+import { anchorOf, artHeight, mirrorsFacing, planAppearance, phaseOffsetMs } from "../content/appearance.ts";
 import type { DrawPlan } from "../content/appearance.ts";
 import type { Entity, WorldSnapshot } from "../simulation/types.ts";
 import { createAppearanceAtlas } from "./atlas.ts";
 import type { AppearanceReportRow } from "./atlas.ts";
+import { GROUND_CELL_UNITS, GROUND_TINT, groundCells } from "./ground.ts";
 import { factionColor } from "./palette.ts";
 import { drawAppearancePlaceholder } from "./placeholder.ts";
 import { drawPlacementMarkers } from "./placement.ts";
@@ -196,12 +198,63 @@ export async function createBattlefield(
     container.sortableChildren = projector.sortable;
   }
 
+  /**
+   * The floor, beneath the outline.
+   *
+   * Added at index 0, with the outline moved above it. The order matters: now that there is
+   * a material down, the outline is the only thing still saying where the playable area
+   * ends, so it has to survive being painted over.
+   *
+   * Started rather than awaited, for the same reason the appearance atlas is. A battlefield
+   * that blocks its first frame on a texture download stays black, and "the floor has not
+   * arrived yet" is a state the screen can already show — the arena background — rather than
+   * one that needs a loading screen in front of it.
+   *
+   * One sprite per cell rather than a single `TilingSprite`: they all share one texture, so
+   * Pixi batches them into one draw call anyway, and a cell is something a later phase can
+   * give a terrain type to. The count is `groundCells`, which is pure and tested.
+   */
+  const tileLayer = new Container();
+  tileLayer.sortableChildren = false;
+  groundLayer.addChildAt(tileLayer, 0);
+
+  let groundDestroyed = false;
+  void Assets.load<Texture>(GROUND_TEXTURE_URL)
+    .then((texture) => {
+      if (groundDestroyed) {
+        // The battlefield was torn down while the texture was in flight. Adding sprites now
+        // would put them into a destroyed stage.
+        return;
+      }
+      for (const cell of groundCells(bounds.width, bounds.height)) {
+        const tile = new Sprite(texture);
+        // Scale rather than `width`/`height`, because a mirrored cell needs a negative
+        // scale, and setting `width` would overwrite it with a positive number.
+        const scale = GROUND_CELL_UNITS / texture.width;
+        tile.scale.set(cell.flipX ? -scale : scale, cell.flipY ? -scale : scale);
+        // A negative scale draws away from the origin, so a flipped cell has to be anchored
+        // on its far corner to still cover the same square of floor.
+        tile.position.set(
+          cell.flipX ? cell.x + GROUND_CELL_UNITS : cell.x,
+          cell.flipY ? cell.y + GROUND_CELL_UNITS : cell.y
+        );
+        tile.tint = GROUND_TINT;
+        tileLayer.addChild(tile);
+      }
+    })
+    .catch((error: unknown) => {
+      // Loud, and then the floor is simply absent. The arena still runs, because a missing
+      // texture is not a reason to refuse to simulate a battle — and the diagnostic panel is
+      // where a reader goes looking for why the ground is not there.
+      console.error("地面材质加载失败", error);
+    });
+
   // A subtle arena outline, so the playfield is legible against the app background. Drawn in
   // world coordinates inside the ground layer, so in the isometric view it becomes the
   // diamond the floor actually is, rather than a rectangle painted over it.
   const frame = new Graphics();
   frame.rect(0, 0, bounds.width, bounds.height).stroke({ width: 2, color: 0x3a4152 });
-  groundLayer.addChildAt(frame, 0);
+  groundLayer.addChildAt(frame, 1);
 
   const markerGfx = new Graphics();
   markerLayer.addChild(markerGfx);
@@ -388,6 +441,28 @@ export async function createBattlefield(
           sprite.view.texture = texture;
           sprite.textureKey = textureKey;
         }
+
+        // The three numbers that put a bitmap *on* the floor rather than over it.
+        //
+        // The anchor comes from the art: a portrait is pinned by its feet, and this pack's
+        // feet are on the bottom edge of the frame, so `y: 1` lands the boots on the unit's
+        // projected position instead of floating it half its own height up the screen.
+        //
+        // The scale converts the spec's world-unit height into texture pixels. Without it a
+        // 128-pixel figure would be drawn 128 world units tall — five times the arena's idea
+        // of a person, which is the same mistake as no scale at all, only louder.
+        //
+        // The mirror is the one that depends on the view rather than on the art, so the sign
+        // is asked of the projection rather than guessed from the world angle. A pose drawn
+        // facing right has to be flipped when its unit walks left, or the wind-up reads as
+        // aimed away from the target it is winding up against.
+        const anchor = anchorOf(plan.spec);
+        const scale = artHeight(plan.spec, texture.height) / texture.height;
+        const mirrored =
+          mirrorsFacing(plan.spec) && projector.horizontalSign(entity.transform.facing) < 0;
+
+        sprite.view.anchor.set(anchor.x, anchor.y);
+        sprite.view.scale.set(mirrored ? -scale : scale, scale);
         sprite.view.position.set(projected.x, projected.y);
         sprite.view.visible = true;
 
@@ -549,6 +624,7 @@ export async function createBattlefield(
     },
 
     destroy(): void {
+      groundDestroyed = true;
       app.renderer.off("resize", fit);
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMove);

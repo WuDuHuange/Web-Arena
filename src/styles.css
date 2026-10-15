@@ -1,11 +1,56 @@
+/*
+ * Project Arena — presentation.
+ *
+ * The canvas is the page, not a box inside it. Everything else floats over it in one of
+ * three layers, and the split is the point:
+ *
+ *   player layer   always visible — phase, play controls, score. What a game shows.
+ *   sandbox layer  one click away — the deployment editor. The product, but not always on.
+ *   diagnostic     collapsed by default — tick counts, seed, content validation, credits.
+ *
+ * Before this, all three shared one scrolling column with equal weight, which is what made
+ * a battle sandbox read as an admin dashboard. The information did not change; its rank did.
+ *
+ * Class names are load-bearing beyond styling: `scripts/verify-*.mjs` click buttons by
+ * their text and read state out of `.panel__phase`, `.panel__readout`, `.app__badge` and
+ * the `.editor__*` tree. Rename one and a verification script silently stops asserting.
+ */
+
 :root {
-  color-scheme: light;
-  --bg: #f4f6fa;
-  --surface: #ffffff;
-  --border: #d9dfe9;
-  --text: #1b2330;
-  --muted: #64708a;
+  color-scheme: dark;
+
+  --bg: #0d1117;
+  --surface: #171d28;
+  --surface-2: #1e2532;
+  --border: #2b3444;
+  --border-strong: #3b465a;
+
+  --text: #e8edf6;
+  --muted: #8d99ae;
+  --faint: #6b7688;
+
   --accent: #4b8fe0;
+  --accent-soft: rgba(75, 143, 224, 0.16);
+  --red: #e0554b;
+  --blue: #4b8fe0;
+  --ok: #46a06a;
+  --warn: #d98634;
+
+  /*
+   * HUD chrome. Deliberately translucent but not blurred: `backdrop-filter` over a WebGL
+   * canvas forces a readback of the canvas every frame, and the frame budget is the one
+   * thing this project has measured and promised. A solid tint costs nothing.
+   */
+  --hud: rgba(16, 21, 30, 0.86);
+  --hud-border: rgba(255, 255, 255, 0.1);
+
+  --radius: 14px;
+  --radius-sm: 9px;
+  --gap: 10px;
+
+  /* Read by the stage too, so the arena never hides underneath the open drawer. */
+  --drawer-w: 336px;
+  --drawer-inset: 12px;
 }
 
 * {
@@ -17,54 +62,40 @@ body,
 #root {
   height: 100%;
   margin: 0;
+  overflow: hidden;
 }
 
 body {
   background: var(--bg);
   color: var(--text);
   font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
 }
+
+/* --- Shell --------------------------------------------------------------- */
 
 .app {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-}
-
-.app__header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 20px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-}
-
-.app__header h1 {
-  margin: 0;
-  font-size: 18px;
-  letter-spacing: 0.02em;
-}
-
-.app__badge {
-  padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.app__main {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-}
-
-.app__stage {
   position: relative;
-  flex: 1;
-  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+/*
+ * Full bleed, and inset by the drawer when it is open.
+ *
+ * The inset is not cosmetic: the renderer fits the arena to its host, so a drawer floating
+ * over the canvas would put the right-hand units permanently underneath it — and the right
+ * edge is where half of any deployment lives.
+ */
+.app__stage {
+  position: absolute;
+  inset: 0;
   background: #1b1f2a;
+}
+
+.app[data-drawer="open"] .app__stage {
+  right: calc(var(--drawer-w) + var(--drawer-inset) * 2);
 }
 
 .app__stage canvas {
@@ -73,29 +104,318 @@ body {
   height: 100%;
 }
 
-.app__panel {
+/* --- HUD layers ---------------------------------------------------------- */
+
+.hud {
+  position: absolute;
+  z-index: 2;
   display: flex;
-  flex-direction: column;
-  gap: 18px;
-  width: 280px;
-  padding: 18px;
-  overflow-y: auto;
-  background: var(--surface);
-  border-left: 1px solid var(--border);
+  gap: var(--gap);
+  pointer-events: none;
 }
 
-.panel__block h2 {
-  margin: 0 0 10px;
-  font-size: 13px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+/* Children opt back in, so the empty parts of a HUD strip do not eat canvas clicks. */
+.hud > * {
+  pointer-events: auto;
+}
+
+.hud--top {
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+/*
+ * The top strip insets with the drawer, for the same reason the stage does — but here the
+ * consequence is worse than a covered unit.
+ *
+ * The drawer sits at z-index 3 and the HUD at 2, so an un-inset top strip puts 声音, 说明 and
+ * 收起布阵 *underneath* the panel. They stay visible-looking and stop responding to a real
+ * mouse. Nothing in the DOM reports that, and a scripted `element.click()` bypasses hit
+ * testing entirely, so the buttons keep "working" in every automated check while being dead
+ * to a user. `scripts/verify-music.mjs` dispatches real input and is what caught it.
+ */
+.app[data-drawer="open"] .hud--top {
+  right: calc(var(--drawer-w) + var(--drawer-inset) * 2);
+}
+
+/*
+ * And the same inset for the play bar, for the same reason.
+ *
+ * `.hud--bottom` spans `left: 0; right: 0`, so the transport is centred on the whole window
+ * rather than on the arena. Once the drawer opens, its right-hand end — the 4x button — goes
+ * under the panel, and the panel wins on z-index. Centring the bar over the stage is both
+ * what it looks like it is doing and what keeps every button reachable.
+ */
+.app[data-drawer="open"] .hud--bottom {
+  right: calc(var(--drawer-w) + var(--drawer-inset) * 2);
+}
+
+.hud__cluster {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.hud__title {
+  margin: 0;
+  padding: 5px 12px;
+  border: 1px solid var(--hud-border);
+  border-radius: 999px;
+  background: var(--hud);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.app__badge {
+  padding: 4px 10px;
+  border: 1px solid var(--hud-border);
+  border-radius: 999px;
+  background: var(--hud);
+  font-size: 12px;
   color: var(--muted);
 }
 
+/* Small round HUD buttons — 声音, 说明, 布阵. */
+.hud__pill {
+  padding: 5px 13px;
+  border: 1px solid var(--hud-border);
+  border-radius: 999px;
+  background: var(--hud);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.hud__pill:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.hud__pill[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* --- Player layer: bottom ------------------------------------------------ */
+
+.hud--bottom {
+  left: 0;
+  right: 0;
+  bottom: 12px;
+  justify-content: center;
+  align-items: flex-end;
+}
+
+/*
+ * The play bar. Phase, transport, rate — the three things a watcher touches mid-battle, in
+ * one strip at the bottom centre where a game puts them.
+ */
+.hud__playbar {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  padding: 8px 12px;
+  border: 1px solid var(--hud-border);
+  border-radius: var(--radius);
+  background: var(--hud);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+
+/* The phase reads as a status light rather than as a heading. */
 .panel__phase {
+  margin: 0;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.hud__score {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  border: 1px solid var(--hud-border);
+  border-radius: var(--radius);
+  background: var(--hud);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.hud__score b {
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.hud__score-item--red b {
+  color: var(--red);
+}
+
+.hud__score-item--blue b {
+  color: var(--blue);
+}
+
+.hud__score-sep {
+  color: var(--faint);
+}
+
+/* --- Attribution --------------------------------------------------------- */
+
+/*
+ * Sits in the top-right utility cluster. The position is a layout decision, not a taste one:
+ * the play bar is centred on the stage, so a pill in any bottom corner collides with the
+ * transport at around 1280 px, and the bottom-left column collides with it too. A wrapping
+ * flex row is the only part of this chrome where nothing can end up underneath anything else.
+ */
+.hud__credit {
+  margin: 0;
+  padding: 5px 11px;
+  border: 1px solid var(--hud-border);
+  border-radius: 999px;
+  background: var(--hud);
+  font-size: 11px;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+/* --- Diagnostic layer ---------------------------------------------------- */
+
+/*
+ * Bottom-left, growing upward: `bottom` is pinned and `top` is auto, so the box extends
+ * away from the bottom edge as it opens instead of pushing the score off screen.
+ */
+.hud--left {
+  left: 12px;
+  bottom: 12px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.hud__diag {
+  border: 1px solid var(--hud-border);
+  border-radius: var(--radius);
+  background: var(--hud);
+  font-size: 13px;
+}
+
+.hud__diag > summary {
+  padding: 7px 14px;
+  border-radius: var(--radius);
+  color: var(--muted);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.hud__diag > summary::-webkit-details-marker {
+  display: none;
+}
+
+.hud__diag > summary::before {
+  content: "▸ ";
+  color: var(--faint);
+}
+
+.hud__diag[open] > summary {
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius) var(--radius) 0 0;
+  color: var(--text);
+}
+
+.hud__diag[open] > summary::before {
+  content: "▾ ";
+}
+
+.hud__diag > summary:hover {
+  color: var(--text);
+}
+
+.hud__diag-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 320px;
+  max-height: min(58vh, 520px);
+  padding: 14px;
+  overflow-y: auto;
+}
+
+/* --- Sandbox layer: the deployment drawer -------------------------------- */
+
+.app__panel {
+  position: absolute;
+  top: var(--drawer-inset);
+  right: var(--drawer-inset);
+  bottom: var(--drawer-inset);
+  z-index: 3;
+  width: var(--drawer-w);
+  padding: 0;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+  transition: transform 160ms ease, opacity 160ms ease;
+}
+
+.app[data-drawer="closed"] .app__panel {
+  transform: translateX(calc(100% + var(--drawer-inset) * 2));
+  opacity: 0;
+  pointer-events: none;
+}
+
+.drawer__head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.drawer__head h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.drawer__body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 14px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app__panel {
+    transition: none;
+  }
+}
+
+/* --- Blocks -------------------------------------------------------------- */
+
+.panel__block h2 {
   margin: 0 0 10px;
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
 }
 
 .panel__buttons {
@@ -104,45 +424,32 @@ body {
   gap: 8px;
 }
 
-/*
- * Playback rate. Deliberately smaller than the session buttons: these are set once and then
- * left alone, whereas 开战／暂停／单步 are pressed repeatedly.
- */
 .panel__speed {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  margin-top: 10px;
-}
-
-.panel__speed-label {
-  /* Own line: five rate buttons plus a label do not fit the 244px content column, and a
-     lone wrapped button reads as a mistake rather than as a row. */
-  flex-basis: 100%;
-  margin-bottom: 2px;
-  color: var(--muted);
-  font-size: 13px;
+  gap: 4px;
 }
 
 .panel__speed button {
-  padding: 4px 8px;
-  font-size: 13px;
+  padding: 4px 9px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
 .panel__speed button.is-active {
   border-color: var(--accent);
+  background: var(--accent-soft);
   color: var(--accent);
 }
 
 button {
-  padding: 7px 14px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
+  padding: 6px 13px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
   color: var(--text);
-  font-size: 14px;
+  font-family: inherit;
+  font-size: 13px;
   cursor: pointer;
 }
 
@@ -152,16 +459,18 @@ button:hover:not(:disabled) {
 }
 
 button:disabled {
-  opacity: 0.45;
+  opacity: 0.4;
   cursor: not-allowed;
 }
+
+/* --- Readouts ------------------------------------------------------------ */
 
 .panel__readout {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 6px 12px;
   margin: 0;
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .panel__readout dt {
@@ -177,16 +486,16 @@ button:disabled {
 /* Survivor counts are the headline number, so they stay legible at a glance. */
 .panel__readout--red,
 .panel__readout--blue {
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 500;
 }
 
 .panel__readout--red {
-  color: #c0453b;
+  color: var(--red);
 }
 
 .panel__readout--blue {
-  color: #2f74c0;
+  color: var(--blue);
 }
 
 .panel__roster {
@@ -213,17 +522,21 @@ button:disabled {
 }
 
 .roster__dot--red {
-  background: #e0554b;
+  background: var(--red);
 }
 
 .roster__dot--blue {
-  background: #4b8fe0;
+  background: var(--blue);
+}
+
+.roster__dot--neutral {
+  background: #9aa4b2;
 }
 
 .roster__tag {
   margin-left: 6px;
   padding: 0 6px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: 999px;
   color: var(--muted);
   font-size: 11px;
@@ -232,7 +545,7 @@ button:disabled {
 
 .roster__cost {
   margin-left: auto;
-  color: var(--muted);
+  color: var(--faint);
   font-variant-numeric: tabular-nums;
 }
 
@@ -240,15 +553,14 @@ button:disabled {
   margin: 0;
   font-size: 12px;
   line-height: 1.6;
-  color: var(--muted);
+  color: var(--faint);
 }
 
-/* Pushes the help button to the far end of the header, away from the scene badges. */
-.app__help {
-  margin-left: auto;
+.panel__note code {
+  font-size: 11px;
 }
 
-/* --- Status lines ------------------------------------------------------- */
+/* --- Status lines -------------------------------------------------------- */
 
 .panel__ok,
 .panel__alert {
@@ -261,11 +573,11 @@ button:disabled {
 }
 
 .panel__ok {
-  color: #2f7a4a;
+  color: var(--ok);
 }
 
 .panel__alert {
-  color: #a3541c;
+  color: var(--warn);
 }
 
 .panel__dot {
@@ -277,20 +589,20 @@ button:disabled {
 }
 
 .panel__dot--ok {
-  background: #46a06a;
+  background: var(--ok);
 }
 
 .panel__dot--warn {
-  background: #d98634;
+  background: var(--warn);
 }
 
 /* --- Validation and import issues --------------------------------------- */
 
 .panel__block--alert {
   padding: 12px;
-  border: 1px solid #e6c49a;
-  border-radius: 8px;
-  background: #fdf7ef;
+  border: 1px solid rgba(217, 134, 52, 0.4);
+  border-radius: var(--radius-sm);
+  background: rgba(217, 134, 52, 0.08);
 }
 
 .panel__issues {
@@ -312,7 +624,7 @@ button:disabled {
 
 .panel__issues code {
   font-size: 11px;
-  color: #8a5a24;
+  color: var(--warn);
   word-break: break-all;
 }
 
@@ -324,7 +636,7 @@ button:disabled {
   margin-top: 10px;
 }
 
-/* --- Credits ------------------------------------------------------------ */
+/* --- Credits and appearance rows ---------------------------------------- */
 
 .panel__details {
   margin-top: 10px;
@@ -360,11 +672,11 @@ button:disabled {
   color: var(--muted);
 }
 
-/* --- Appearance load state ---------------------------------------------- */
-
-/* A row rather than the stacked default, because a key, its state and its failure reason
-   are read as one line: "this key, in this state, because of this". The selector has to
-   out-specify `.panel__appearances li`, which sets the column direction. */
+/*
+ * A row rather than the stacked default, because a key, its state and its failure reason
+ * are read as one line: "this key, in this state, because of this". The selector has to
+ * out-specify `.panel__appearances li`, which sets the column direction.
+ */
 .panel__appearances li.panel__appearance-row {
   flex-direction: row;
   align-items: baseline;
@@ -384,15 +696,15 @@ button:disabled {
 /* The three states get three colours, because the panel is the only place the difference
    between "no art" and "art that did not load" can be read in words. */
 .appearance__state--ready {
-  color: #2f7a4a;
+  color: var(--ok);
 }
 
 .appearance__state--pending {
-  color: #a3541c;
+  color: var(--warn);
 }
 
 .appearance__state--failed {
-  color: #b3352a;
+  color: #d8564a;
 }
 
 .appearance__reason {
@@ -408,10 +720,6 @@ button:disabled {
   border-top: 1px dashed var(--border);
 }
 
-.panel__note code {
-  font-size: 11px;
-}
-
 /* --- Help overlay ------------------------------------------------------- */
 
 .help {
@@ -423,15 +731,16 @@ button:disabled {
   justify-content: center;
   padding: 32px 20px;
   overflow-y: auto;
-  background: rgba(18, 22, 30, 0.62);
+  background: rgba(8, 11, 17, 0.72);
 }
 
 .help__card {
   width: min(760px, 100%);
   padding: 28px 32px 24px;
-  border-radius: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
   background: var(--surface);
-  box-shadow: 0 18px 48px rgba(10, 14, 22, 0.32);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
 }
 
 .help__header {
@@ -441,6 +750,7 @@ button:disabled {
 .help__header h2 {
   margin: 0;
   font-size: 22px;
+  font-weight: 500;
   letter-spacing: 0.02em;
 }
 
@@ -456,7 +766,8 @@ button:disabled {
 
 .help__section h3 {
   margin: 0 0 8px;
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--muted);
@@ -471,7 +782,7 @@ button:disabled {
 .help__section code {
   padding: 1px 5px;
   border-radius: 4px;
-  background: var(--bg);
+  background: var(--surface-2);
   font-size: 12px;
 }
 
@@ -523,7 +834,7 @@ button:disabled {
 }
 
 .help__name {
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .help__desc {
@@ -567,7 +878,7 @@ button:disabled {
   margin: 12px 0 6px;
   font-size: 11px;
   letter-spacing: 0.06em;
-  color: var(--muted);
+  color: var(--faint);
 }
 
 .editor__chips {
@@ -583,21 +894,21 @@ button:disabled {
 }
 
 .editor__chip--red:hover:not(:disabled) {
-  border-color: #e0554b;
-  color: #c2453b;
+  border-color: var(--red);
+  color: var(--red);
 }
 
 .editor__chip--blue:hover:not(:disabled) {
-  border-color: #4b8fe0;
-  color: #3a76bd;
+  border-color: var(--blue);
+  color: var(--blue);
 }
 
 .editor__inspector {
   margin-top: 12px;
   padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
 }
 
 .editor__selected {
@@ -606,7 +917,7 @@ button:disabled {
   gap: 8px;
   margin: 0 0 8px;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .editor__inspector .panel__buttons {
@@ -617,7 +928,7 @@ button:disabled {
   margin: 12px 0 0;
   font-size: 12px;
   line-height: 1.6;
-  color: var(--muted);
+  color: var(--faint);
 }
 
 .editor__tags {
@@ -628,8 +939,4 @@ button:disabled {
 
 .editor__actions {
   margin-top: 12px;
-}
-
-.roster__dot--neutral {
-  background: #9aa4b2;
 }

@@ -13,5 +13,8 @@ coverage/
 # Both are throwaway: deleting them only costs a slower first launch next time.
 .bench-chrome/
 .bench-chrome-gpu/
-.cdp-profile/
+# The verify scripts each take their own profile directory (`.cdp-profile-one9334`,
+# `.cdp-profile-regress`, …), so a bare `.cdp-profile/` only ever caught one of them and
+# left the rest to show up as untracked. The wildcard is what actually keeps them out.
+.cdp-profile*/
 .cdp-fresh/

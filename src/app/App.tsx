@@ -38,6 +38,8 @@ import type { DeploymentSummary } from "../persistence/deployment-io.ts";
 import { createBattlefield } from "../render/battlefield.ts";
 import { projectionKindFrom } from "../render/projection.ts";
 import type { ProjectionKind } from "../render/projection.ts";
+import { onVisibility } from "./attention.ts";
+import type { AttentionState } from "./attention.ts";
 import type { Battlefield } from "../render/battlefield.ts";
 import type { AppearanceReportRow } from "../render/atlas.ts";
 import type { PlacementMarker } from "../render/placement.ts";
@@ -45,6 +47,9 @@ import { createCueDetector } from "../audio/detect.ts";
 import type { CueDetector } from "../audio/detect.ts";
 import { createAudioEngine } from "../audio/synth.ts";
 import type { AudioEngine } from "../audio/synth.ts";
+import { createMusicChannel, shouldPlayMusic } from "../audio/music.ts";
+import type { MusicChannel } from "../audio/music.ts";
+import { BGM_URL } from "../assets/index.ts";
 import { Simulation } from "../simulation/index.ts";
 import type { BattleSetup, Faction } from "../simulation/index.ts";
 import { ContentIssues } from "./ContentIssues.tsx";
@@ -200,9 +205,18 @@ export function App() {
   const simulationRef = useRef<Simulation | null>(null);
   const battlefieldRef = useRef<Battlefield | null>(null);
   const phaseRef = useRef<Phase>("editing");
+  /**
+   * Whether the current pause was imposed by a hidden page rather than asked for by the user.
+   *
+   * A ref rather than state because nothing renders it: it exists only so the return-from-
+   * hidden transition can tell "our pause" from "the operator's pause". Keeping it out of the
+   * render path also means the visibility listener never has to be reinstalled.
+   */
+  const autoPausedRef = useRef(false);
   const setupRef = useRef<BattleSetup | null>(null);
   const audioRef = useRef<AudioEngine | null>(null);
   const cuesRef = useRef<CueDetector | null>(null);
+  const musicRef = useRef<MusicChannel | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   /**
@@ -243,6 +257,14 @@ export function App() {
   const [speed, setSpeed] = useState<number>(1);
   const speedRef = useRef(1);
   const [helpOpen, setHelpOpen] = useState(() => !readHelpSeen());
+  /**
+   * Whether the deployment drawer is showing.
+   *
+   * Open by default. The drawer is the sandbox's whole point — laying out a field is the
+   * activity, not a setting — so hiding it behind a click would trade the product for the
+   * impression of one. It floats and it collapses in one click; that is the game-feel half.
+   */
+  const [drawerOpen, setDrawerOpen] = useState(true);
   const [importIssues, setImportIssues] = useState<readonly string[]>([]);
   const [importSummary, setImportSummary] = useState<DeploymentSummary | null>(null);
   /** Flips once the WebGL battlefield exists, so effects can wait for it. */
@@ -265,8 +287,24 @@ export function App() {
   });
 
   const applyPhase = useCallback((next: Phase) => {
+    // Every explicit transition clears the automatic mark. A phase the user asked for is never
+    // an automatic pause, and the mark's only job is to let a return undo *our* pause — so an
+    // operator pressing 暂停 and then switching tabs must come back to a battle still paused.
+    autoPausedRef.current = false;
     phaseRef.current = next;
     setPhase(next);
+  }, []);
+
+  /**
+   * Applies a decision from the attention policy, which owns the automatic mark.
+   *
+   * Separate from `applyPhase` precisely because that one clears the mark: routing an
+   * automatic pause through it would erase the fact that makes a return able to undo it.
+   */
+  const applyAttention = useCallback((next: AttentionState) => {
+    autoPausedRef.current = next.autoPaused;
+    phaseRef.current = next.phase;
+    setPhase(next.phase);
   }, []);
 
   // --- The draft is the layout -------------------------------------------------
@@ -406,6 +444,9 @@ export function App() {
     // battle path checks whether sound succeeded.
     audioRef.current = createAudioEngine();
     cuesRef.current = createCueDetector();
+    // The music channel is built here but deliberately not started: starting is a gesture,
+    // and 开战 is the gesture. See `handleStart`.
+    musicRef.current = createMusicChannel({ url: BGM_URL });
 
     const loop = (now: number): void => {
       if (disposed) {
@@ -485,6 +526,22 @@ export function App() {
               radius: entity.collider.radius
             })) ?? []
       };
+
+      /**
+       * Music probe, for the same reason the appearance one exists: "the track plays" is not
+       * something a unit test can assert, and a silent arena has three different causes —
+       * no audio element, a blocked autoplay, a file that never loaded — that look identical
+       * from the outside. `readyState` and `errorCode` are what tell them apart.
+       */
+      (window as unknown as { __arenaMusic?: unknown }).__arenaMusic = {
+        state: (): unknown => ({
+          available: musicRef.current?.available ?? false,
+          playing: musicRef.current?.playing ?? false,
+          muted: musicRef.current?.muted ?? false,
+          source: musicRef.current?.source ?? "",
+          ...(musicRef.current?.diagnostics() ?? { readyState: 0, errorCode: null, volume: 0 })
+        })
+      };
     }
 
     return () => {
@@ -495,12 +552,66 @@ export function App() {
       audioRef.current?.destroy();
       audioRef.current = null;
       cuesRef.current = null;
+      musicRef.current?.destroy();
+      musicRef.current = null;
       delete (window as unknown as { __arenaBench?: unknown }).__arenaBench;
       if (debug) {
         delete (window as unknown as { __arenaAppearance?: unknown }).__arenaAppearance;
+        delete (window as unknown as { __arenaMusic?: unknown }).__arenaMusic;
       }
     };
   }, [applyPhase]);
+
+  /**
+   * Music follows the phase.
+   *
+   * `handleStart` calls `play()` inside the click, because a gesture is the one thing the
+   * browser insists on. This effect is the other half of the policy: it stops the track on
+   * 重置, and it is what keeps 暂停 and 已分胜负 audible rather than going quiet the moment a
+   * battle is interrupted or decided. Both calls are idempotent, so the overlap on 开战 costs
+   * nothing.
+   */
+  useEffect(() => {
+    const music = musicRef.current;
+    if (!music) {
+      return;
+    }
+    if (shouldPlayMusic(phase)) {
+      music.play();
+    } else {
+      music.stop();
+    }
+  }, [phase]);
+
+  /**
+   * A hidden page pauses the fight; looking at it again resumes.
+   *
+   * The architecture asks for this in §2.2 — "页面失焦默认暂停" — for the reason the same line
+   * gives: a page nobody is rendering must not accumulate time. `?scene=stress` exists to show
+   * what a backgrounded tab would otherwise be asked to do.
+   *
+   * The policy lives in `attention.ts` because that is the half worth testing without a
+   * browser; this effect is only the wiring. It reads the refs at event time rather than
+   * closing over the phase, so the listener is installed once and never reinstalled — which
+   * matters here more than usual, because reinstalling a listener that is currently firing is
+   * a good way to lose the event that mattered.
+   */
+  useEffect(() => {
+    const onVisibilityChange = (): void => {
+      const next = onVisibility(
+        { phase: phaseRef.current, autoPaused: autoPausedRef.current },
+        document.visibilityState === "visible"
+      );
+      // Identity is not the test — the policy returns the argument unchanged when there is
+      // nothing to do, but the caller should not have to know that.
+      if (next.phase === phaseRef.current && next.autoPaused === autoPausedRef.current) {
+        return;
+      }
+      applyAttention(next);
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, [applyAttention]);
 
   /**
    * The battlefield is rebuilt when the arena changes size.
@@ -777,6 +888,9 @@ export function App() {
     battlefieldRef.current?.resetInterpolation();
     setReadout(readSummary(simulation));
     audioRef.current?.resume();
+    // Inside the click, not from an effect: this is the gesture the browser requires before
+    // it will let a track start. The phase effect below is the other half of the policy.
+    musicRef.current?.play();
     applyPhase("running");
   }, [buildSetup, applyPhase]);
 
@@ -784,6 +898,9 @@ export function App() {
     setMuted((previous) => {
       const next = !previous;
       audioRef.current?.setMuted(next);
+      // Mute is a gain of zero, so the track keeps its place in the loop and unmuting
+      // rejoins it rather than restarting the fight music from the top.
+      musicRef.current?.setMuted(next);
       return next;
     });
   }, []);
@@ -884,77 +1001,241 @@ export function App() {
   }, [buildSetup]);
 
   return (
-    <div className="app">
-      <header className="app__header">
-        <h1>Project Arena</h1>
-        <span className="app__badge">对战闭环</span>
-        <span className="app__badge">场景：{scene}</span>
-        {VIEW === "iso" && <span className="app__badge">视图：等距 2.5D（实验）</span>}
-        <button type="button" className="app__help" onClick={() => setHelpOpen(true)}>
-          说明
-        </button>
-      </header>
+    <div className="app" data-drawer={drawerOpen ? "open" : "closed"}>
+      {/*
+        The canvas is the page. Everything below floats over it, in rank order: what a
+        watcher needs while a fight runs, then the sandbox controls, then the diagnostics.
+      */}
+      <div className="app__stage" ref={hostRef} />
 
-      <main className="app__main">
-        <div className="app__stage" ref={hostRef} />
+      {/* Player layer — identity and the two controls that are never phase-dependent. */}
+      <div className="hud hud--top">
+        <div className="hud__cluster">
+          <h1 className="hud__title">Project Arena</h1>
+          {/*
+            Two badges are always present. That is not decoration: the smoke test refuses to
+            run on a page with fewer than two, because "the header rendered" is the cheapest
+            way to tell a mounted app from a blank one.
+          */}
+          <span className="app__badge">沙盒</span>
+          <span className="app__badge">场景：{scene}</span>
+          {VIEW === "iso" && <span className="app__badge">视图：等距 2.5D（实验）</span>}
+        </div>
+        <div className="hud__cluster">
+          <button
+            type="button"
+            className="hud__pill"
+            aria-pressed={drawerOpen}
+            onClick={() => setDrawerOpen((open) => !open)}
+          >
+            {drawerOpen ? "收起布阵" : "布阵"}
+          </button>
+          <button type="button" className="hud__pill" onClick={handleToggleMute}>
+            {muted ? "声音：关" : "声音：开"}
+          </button>
+          <button type="button" className="hud__pill" onClick={() => setHelpOpen(true)}>
+            说明
+          </button>
 
-        <aside className="app__panel">
-          <section className="panel__block">
-            <h2>会话</h2>
-            <p className="panel__phase">{phaseLabel(phase)}</p>
-            <div className="panel__buttons">
+          {/*
+            Attribution, in the chrome rather than only inside the diagnostics drawer.
+
+            The floor is CC0 and owes nothing, but the music is CC BY 4.0, which requires the
+            credit to sit somewhere a visitor reaches without opening a panel. It is the last
+            item of the top-right cluster — the utility row — for a layout reason rather than
+            a stylistic one: the play bar is centred on the stage, so a pill parked in a
+            bottom corner collides with the transport at around 1280 px, and the bottom-left
+            column collides with it too. Both were measured, not guessed. A flex row that
+            wraps is the one place in this chrome where nothing can be overlapped.
+
+            The full record — title, author, licence link, acquisition date — is in the
+            素材署名 block. This line is a pointer to it, not a replacement for it.
+          */}
+          <p className="hud__credit">音乐：魔王魂「8bit27」· CC BY 4.0</p>
+        </div>
+      </div>
+
+      {/*
+        Player layer — the transport.
+
+        Phase, the five transport buttons and the rate live in one strip rather than in a
+        sidebar block, because they are the only controls a watcher touches once a battle is
+        running and they should never be a scroll away from the fight.
+      */}
+      <div className="hud hud--bottom">
+        <div className="hud__playbar">
+          <p className="panel__phase">{phaseLabel(phase)}</p>
+          <div className="panel__buttons">
+            <button
+              type="button"
+              onClick={handleStart}
+              disabled={phase !== "editing" || !canStart}
+              title={canStart ? undefined : readiness.reason || "布阵有未解决的问题"}
+            >
+              开战
+            </button>
+            <button
+              type="button"
+              onClick={() => applyPhase(phase === "paused" ? "running" : "paused")}
+              disabled={phase !== "running" && phase !== "paused"}
+            >
+              {phase === "paused" ? "继续" : "暂停"}
+            </button>
+            <button
+              type="button"
+              onClick={handleStepOnce}
+              disabled={phase !== "paused"}
+              title="推进一个 tick —— 60 Hz 下的 1/60 秒"
+            >
+              单步
+            </button>
+            <button type="button" onClick={handleReset}>
+              重置
+            </button>
+          </div>
+          {/*
+            Playback rate. Available in every phase, not just while running: it is a setting
+            for the next run as much as a control for this one, and a disabled control that
+            silently changes nothing is worse than an enabled one.
+          */}
+          <div className="panel__speed" role="group" aria-label="播放速度">
+            {SPEEDS.map((value) => (
               <button
+                key={value}
                 type="button"
-                onClick={handleStart}
-                disabled={phase !== "editing" || !canStart}
-                title={canStart ? undefined : readiness.reason || "布阵有未解决的问题"}
+                className={value === speed ? "is-active" : undefined}
+                aria-pressed={value === speed}
+                onClick={() => handleChangeSpeed(value)}
               >
-                开战
+                {value}×
               </button>
-              <button
-                type="button"
-                onClick={() => applyPhase(phase === "paused" ? "running" : "paused")}
-                disabled={phase !== "running" && phase !== "paused"}
-              >
-                {phase === "paused" ? "继续" : "暂停"}
-              </button>
-              <button
-                type="button"
-                onClick={handleStepOnce}
-                disabled={phase !== "paused"}
-                title="推进一个 tick —— 60 Hz 下的 1/60 秒"
-              >
-                单步
-              </button>
-              <button type="button" onClick={handleReset}>
-                重置
-              </button>
-              <button type="button" onClick={handleToggleMute}>
-                {muted ? "音效：关" : "音效：开"}
-              </button>
-            </div>
+            ))}
+          </div>
+        </div>
+      </div>
 
-            {/*
-              Playback rate. Available in every phase, not just while running: it is a
-              setting for the next run as much as a control for this one, and a disabled
-              control that silently changes nothing is worse than an enabled one.
-            */}
-            <div className="panel__speed" role="group" aria-label="播放速度">
-              <span className="panel__speed-label">播放速度</span>
-              {SPEEDS.map((value) => (
-                <button
-                  key={value}
-                  type="button"
-                  className={value === speed ? "is-active" : undefined}
-                  aria-pressed={value === speed}
-                  onClick={() => handleChangeSpeed(value)}
-                >
-                  {value}×
-                </button>
-              ))}
-            </div>
-          </section>
+      {/* Player layer — the score, and below it the diagnostic layer. */}
+      <div className="hud hud--left">
+        <details className="hud__diag">
+          <summary>诊断</summary>
+          <div className="hud__diag-body">
+            <section className="panel__block">
+              <h2>战况</h2>
+              <dl className="panel__readout">
+                <dt>红方存活</dt>
+                <dd className="panel__readout--red">{readout.redAlive}</dd>
+                <dt>蓝方存活</dt>
+                <dd className="panel__readout--blue">{readout.blueAlive}</dd>
+                <dt>生效中效果</dt>
+                <dd>{readout.activeEffects}</dd>
+              </dl>
+            </section>
 
+            <section className="panel__block">
+              <h2>诊断</h2>
+              <dl className="panel__readout">
+                <dt>Tick</dt>
+                <dd>{readout.tick}</dd>
+                <dt>实体</dt>
+                <dd>{readout.entities}</dd>
+                <dt>丢弃模拟时间</dt>
+                <dd>{readout.droppedMs} ms</dd>
+                <dt>机关伤害</dt>
+                <dd>{readout.mechanismDamage}</dd>
+              </dl>
+            </section>
+
+            <ContentIssues
+              result={VALIDATION}
+              characters={CONTENT_LIBRARY.characters.length}
+              abilities={CONTENT_LIBRARY.abilities.length}
+              props={CONTENT_LIBRARY.props.length}
+            />
+
+            <section className="panel__block">
+              <h2>外观</h2>
+              {APPEARANCE_PROBLEMS.length > 0 ? (
+                <ul className="panel__issues">
+                  {APPEARANCE_PROBLEMS.map((problem, index) => (
+                    <li key={index}>
+                      <span>{problem}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+
+              {registryKeyCount === 0 ? (
+                // Distinguished from "the battlefield is not up yet": both show no rows, and
+                // they mean opposite things — one is a normal empty registry, the other is a
+                // renderer that has not started.
+                <p className="panel__note">注册表为空：当前全部图形由程序绘制，没有需要加载的素材。</p>
+              ) : appearance.length === 0 ? (
+                <p className="panel__note">外观层尚未就绪（战场还没建起来）。</p>
+              ) : (
+                <>
+                  <p className={appearanceTally.failed > 0 ? "panel__alert" : "panel__ok"}>
+                    <span
+                      className={`panel__dot panel__dot--${appearanceTally.failed > 0 ? "warn" : "ok"}`}
+                    />
+                    注册表 {appearance.length} 键 · 就绪 {appearanceTally.ready} · 加载中{" "}
+                    {appearanceTally.pending} · 失败 {appearanceTally.failed}
+                  </p>
+                  <ul className="panel__appearances">
+                    {appearance.map((row) => (
+                      <li key={row.key} className="panel__appearance-row">
+                        <code>{row.key}</code>
+                        <span className={`appearance__state appearance__state--${row.state}`}>
+                          {APPEARANCE_STATE_LABEL[row.state]}
+                        </span>
+                        {row.reason ? (
+                          <span className="appearance__reason">{row.reason}</span>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+
+              {/* The three states are spelled out because the difference between them is the
+                  whole contract, and it is not visible in a screenshot: "no art" and "art that
+                  failed to load" only look different because the renderer makes them differ. */}
+              <p className="panel__note">
+                键不在注册表里 = 没有素材，程序绘制，这是正常状态。表里有键但图没出来 =
+                加载中或加载失败，战场上画成洋红虚线框——与程序绘制的圆身一眼可分，不会静默降级成「看起来正常的灰盒」。
+                注册表在 <code>src/content/appearance.ts</code>。
+              </p>
+            </section>
+
+            <CreditsPanel />
+
+            <p className="panel__note">
+              近战、扇形、穿透直线与圆形范围已接入；{PROP_LIBRARY.length} 类机关（
+              {PROP_LIBRARY.map((prop) => prop.name).join("、")}
+              ）可仿真。Tag 与 Buff 由能力表解释，布阵可在战场上直接拖拽编辑。
+            </p>
+          </div>
+        </details>
+
+        <div className="hud__score">
+          <span className="hud__score-item hud__score-item--red">
+            红 <b>{readout.redAlive}</b>
+          </span>
+          <span className="hud__score-sep">/</span>
+          <span className="hud__score-item hud__score-item--blue">
+            蓝 <b>{readout.blueAlive}</b>
+          </span>
+        </div>
+      </div>
+
+      {/* Sandbox layer — the deployment drawer. */}
+      <aside className="app__panel" aria-label="布阵">
+        <div className="drawer__head">
+          <h2>布阵</h2>
+          <button type="button" className="hud__pill" onClick={() => setDrawerOpen(false)}>
+            收起
+          </button>
+        </div>
+        <div className="drawer__body">
           <DeploymentEditor
             draft={draft}
             bounds={bounds}
@@ -969,32 +1250,6 @@ export function App() {
             onClear={handleClear}
             onRestore={handleRestoreScene}
           />
-
-          <section className="panel__block">
-            <h2>战况</h2>
-            <dl className="panel__readout">
-              <dt>红方存活</dt>
-              <dd className="panel__readout--red">{readout.redAlive}</dd>
-              <dt>蓝方存活</dt>
-              <dd className="panel__readout--blue">{readout.blueAlive}</dd>
-              <dt>生效中效果</dt>
-              <dd>{readout.activeEffects}</dd>
-            </dl>
-          </section>
-
-          <section className="panel__block">
-            <h2>诊断</h2>
-            <dl className="panel__readout">
-              <dt>Tick</dt>
-              <dd>{readout.tick}</dd>
-              <dt>实体</dt>
-              <dd>{readout.entities}</dd>
-              <dt>丢弃模拟时间</dt>
-              <dd>{readout.droppedMs} ms</dd>
-              <dt>机关伤害</dt>
-              <dd>{readout.mechanismDamage}</dd>
-            </dl>
-          </section>
 
           <section className="panel__block">
             <h2>兵装</h2>
@@ -1065,75 +1320,8 @@ export function App() {
               </>
             ) : null}
           </section>
-
-          <ContentIssues
-            result={VALIDATION}
-            characters={CONTENT_LIBRARY.characters.length}
-            abilities={CONTENT_LIBRARY.abilities.length}
-            props={CONTENT_LIBRARY.props.length}
-          />
-
-          <section className="panel__block">
-            <h2>外观</h2>
-            {APPEARANCE_PROBLEMS.length > 0 ? (
-              <ul className="panel__issues">
-                {APPEARANCE_PROBLEMS.map((problem, index) => (
-                  <li key={index}>
-                    <span>{problem}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-
-            {registryKeyCount === 0 ? (
-              // Distinguished from "the battlefield is not up yet": both show no rows, and
-              // they mean opposite things — one is a normal empty registry, the other is a
-              // renderer that has not started.
-              <p className="panel__note">注册表为空：当前全部图形由程序绘制，没有需要加载的素材。</p>
-            ) : appearance.length === 0 ? (
-              <p className="panel__note">外观层尚未就绪（战场还没建起来）。</p>
-            ) : (
-              <>
-                <p className={appearanceTally.failed > 0 ? "panel__alert" : "panel__ok"}>
-                  <span
-                    className={`panel__dot panel__dot--${appearanceTally.failed > 0 ? "warn" : "ok"}`}
-                  />
-                  注册表 {appearance.length} 键 · 就绪 {appearanceTally.ready} · 加载中{" "}
-                  {appearanceTally.pending} · 失败 {appearanceTally.failed}
-                </p>
-                <ul className="panel__appearances">
-                  {appearance.map((row) => (
-                    <li key={row.key} className="panel__appearance-row">
-                      <code>{row.key}</code>
-                      <span className={`appearance__state appearance__state--${row.state}`}>
-                        {APPEARANCE_STATE_LABEL[row.state]}
-                      </span>
-                      {row.reason ? <span className="appearance__reason">{row.reason}</span> : null}
-                    </li>
-                  ))}
-                </ul>
-              </>
-            )}
-
-            {/* The three states are spelled out because the difference between them is the
-                whole contract, and it is not visible in a screenshot: "no art" and "art that
-                failed to load" only look different because the renderer makes them differ. */}
-            <p className="panel__note">
-              键不在注册表里 = 没有素材，程序绘制，这是正常状态。表里有键但图没出来 =
-              加载中或加载失败，战场上画成洋红虚线框——与程序绘制的圆身一眼可分，不会静默降级成「看起来正常的灰盒」。
-              注册表在 <code>src/content/appearance.ts</code>。
-            </p>
-          </section>
-
-          <CreditsPanel />
-
-          <p className="panel__note">
-            近战、扇形、穿透直线与圆形范围已接入；{PROP_LIBRARY.length} 类机关（
-            {PROP_LIBRARY.map((prop) => prop.name).join("、")}
-            ）可仿真，表现与音效均为程序生成。Tag 与 Buff 由能力表解释，布阵可在战场上直接拖拽编辑。
-          </p>
-        </aside>
-      </main>
+        </div>
+      </aside>
 
       {helpOpen ? (
         <HelpOverlay

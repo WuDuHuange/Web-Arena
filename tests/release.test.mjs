@@ -12,7 +12,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { parseDeployment, summariseDeployment } from "../src/persistence/deployment-io.ts";
-import { findIncompleteCredits, findUnregisteredAppearances } from "../src/content/credits.ts";
+import {
+  ASSET_CREDITS,
+  findIncompleteCredits,
+  findUnregisteredAppearances
+} from "../src/content/credits.ts";
+import { APPEARANCE_REGISTRY } from "../src/content/appearance.ts";
 
 const VALID_DEPLOYMENT = {
   seed: 7,
@@ -176,14 +181,22 @@ test("summarising counts units and props separately", () => {
 });
 
 test("an empty credit registry is complete, not incomplete", () => {
-  // The build ships no external assets, so having nothing to declare is the correct state.
+  // Nothing to declare is a correct state, not a missing one.
   assert.deepEqual(findIncompleteCredits([]), []);
 });
 
 test("a half-filled credit is reported field by field", () => {
   // A partial credit looks like diligence while leaving the licence question unanswered.
   const problems = findIncompleteCredits([
-    { appearance: "red-blade", title: "Blade", author: "", source: "", licence: "", obtained: "" }
+    {
+      kind: "appearance",
+      slot: "red-blade",
+      title: "Blade",
+      author: "",
+      source: "",
+      licence: "",
+      obtained: ""
+    }
   ]);
 
   assert.ok(problems.some((p) => p.includes("author")));
@@ -194,7 +207,15 @@ test("a half-filled credit is reported field by field", () => {
 
 test("a whitespace-only credit field counts as missing", () => {
   const problems = findIncompleteCredits([
-    { appearance: "x", title: "  ", author: "a", source: "s", licence: "l", obtained: "2026-01-01" }
+    {
+      kind: "material",
+      slot: "ground.sand",
+      title: "  ",
+      author: "a",
+      source: "s",
+      licence: "l",
+      obtained: "2026-01-01"
+    }
   ]);
 
   assert.ok(problems.some((p) => p.includes("title")));
@@ -203,11 +224,76 @@ test("a whitespace-only credit field counts as missing", () => {
 test("appearance keys without a credit are reported once the asset phase starts", () => {
   const appearances = ["red-blade", "prop-lava", "blue-skirmisher"];
   const registered = [
-    { appearance: "prop-lava", title: "t", author: "a", source: "s", licence: "l", obtained: "d" }
+    {
+      kind: "appearance",
+      slot: "prop-lava",
+      title: "t",
+      author: "a",
+      source: "s",
+      licence: "l",
+      obtained: "2026-01-01"
+    }
   ];
 
   assert.deepEqual(findUnregisteredAppearances(appearances, registered), [
     "red-blade",
     "blue-skirmisher"
   ]);
+});
+
+test("a material credit cannot stand in for an appearance key", () => {
+  // The two kinds are not interchangeable. A floor texture carries no appearance key, so
+  // letting it satisfy this check would mark a sprite as licensed when it never was.
+  const registered = [
+    {
+      kind: "material",
+      slot: "ground.earth",
+      title: "Ground051",
+      author: "ambientCG",
+      source: "s",
+      licence: "CC0",
+      obtained: "2026-10-13"
+    }
+  ];
+
+  assert.deepEqual(findUnregisteredAppearances(["ground.earth"], registered), ["ground.earth"]);
+});
+
+test("the shipped credit registry is complete", () => {
+  // Guards the real data, not a fixture: the floor material is in the build, so its row has
+  // to be filled in rather than left as a template.
+  assert.deepEqual(findIncompleteCredits(ASSET_CREDITS), []);
+  assert.ok(ASSET_CREDITS.length > 0, "the asset phase has started, so a row must exist");
+});
+
+test("the battle loop is registered with its attribution obligation intact", () => {
+  // The music is CC BY, not CC0: the licence requires attribution, and both the HUD corner
+  // line and the credits panel render from this row. Losing it would be a licence breach
+  // that nothing else would notice, because the app keeps working perfectly without it.
+  const music = ASSET_CREDITS.find((credit) => credit.slot === "music.battle");
+
+  assert.ok(music, "the build ships a BGM track, so a row must exist for it");
+  assert.equal(music.kind, "material");
+  assert.match(music.licence, /CC BY 4\.0/);
+  assert.match(music.author, /魔王魂/);
+  assert.match(music.source, /^https:\/\/maou\.audio\//);
+});
+
+test("every shipped appearance key has an appearance-kind credit", () => {
+  // The kind is the part that decides coverage: `findUnregisteredAppearances` only counts
+  // appearance rows, so a sprite registered as `material` would look credited in the panel
+  // and still be reported as unlicensed by the one check that matters.
+  for (const key of Object.keys(APPEARANCE_REGISTRY)) {
+    const credit = ASSET_CREDITS.find((row) => row.slot === key);
+    assert.ok(credit, `appearance key "${key}" ships art, so it must have a credit row`);
+    assert.equal(credit.kind, "appearance", `"${key}" must be credited as an appearance`);
+    assert.match(credit.licence, /CC0/, `"${key}" comes from a CC0 pack`);
+    assert.match(credit.source, /^https:\/\/kenney\.nl\//);
+  }
+
+  assert.deepEqual(
+    findUnregisteredAppearances(Object.keys(APPEARANCE_REGISTRY), ASSET_CREDITS),
+    [],
+    "every shipped appearance key must be covered by a credit"
+  );
 });

@@ -24,6 +24,28 @@
  *      with distance from the origin, which is exactly the kind of bug that survives a
  *      casual look at a screenshot.
  *
+ * ## Why the geometry checks pin the appearance layer to procedural
+ *
+ * Checks 2 and 3 identify the two teams by their **faction fill** — a solid `#e0554b` or
+ * `#4b8fe0` disc. That predicate only works while some unit is drawn procedurally, and since
+ * the character-art phase every character in the library resolves to a bitmap: the shipped
+ * scene has no procedural disc left. Left alone, the predicate then latches onto whatever
+ * else happens to be red or blue on the floor — an aura prop's `#ff7a3c` glow reads as red
+ * and the robot's `#5393c5` armour reads as blue — and the "teams are in opposite corners"
+ * check reports the arena upside down. It did exactly that.
+ *
+ * So the geometry phases overwrite every shipped key with `null` through the debug hook
+ * first, which is the state a key that was never registered is in: every unit falls through
+ * to the procedural body. That is not a weaker test. The subject of these checks is the
+ * **floor matrix** — where the projection put the units — and a procedural body is the one
+ * rendering whose colour is a property of the simulation rather than of whichever art pack
+ * is loaded. It also keeps this script from breaking the next time the art changes.
+ *
+ * Art gets its own phase at the end: the keys are restored and a unit drawn from art has to
+ * have its pixels on its projected point, which is the half of claim 3 the procedural bodies
+ * cannot speak to. (The earlier version of this check asked for the demo fixture's yellow
+ * attack ring. That fixture is gone; it had been passing by matching a prop glow.)
+ *
  * Usage: node --experimental-strip-types scripts/verify-iso.mjs <pageUrl> [--port=9336] [--shot=out]
  */
 import { statSync } from "node:fs";
@@ -159,7 +181,20 @@ const check = (passed, message, detail) => {
   checks.push({ passed, message, ...(detail === undefined ? {} : { detail }) });
 };
 
-async function open(query) {
+const override = (key, entry) =>
+  evaluate(`window.__arenaAppearance.override(${JSON.stringify(key)}, ${JSON.stringify(entry)}), "ok"`);
+
+/**
+ * The shipped registry, captured before the geometry phases pin it to `null`.
+ *
+ * Snapshotting first is not optional: `override(key, null)` removes the key, so the registry
+ * read afterwards no longer knows what the entry was. `verify-appearance.mjs` has a comment
+ * about an earlier version of *that* script "restoring" the broken entry it had just
+ * installed and then reporting the art never came back.
+ */
+let pristine = null;
+
+async function open(query, { procedural = false } = {}) {
   await send("Page.navigate", { url: buildUrl(query) });
   const deadline = Date.now() + 25_000;
   let ready = false;
@@ -177,16 +212,54 @@ async function open(query) {
   // synthetic pointer events the drag test dispatches.
   await evaluate(`document.querySelector(".help__footer button")?.click(), "dismissed"`);
   await delay(400);
+
+  if (procedural) {
+    if (pristine === null) {
+      pristine = await evaluate(`window.__arenaAppearance.registry()`);
+    }
+    // Pinned one key at a time rather than in a batch, because each call is a round trip and
+    // a half-applied pin would leave the scene in a state neither phase expects.
+    for (const key of Object.keys(pristine)) {
+      await override(key, null);
+    }
+    await delay(500);
+  }
+}
+
+/** Puts the shipped art back, for the one check that needs it. */
+async function restoreArt() {
+  if (pristine === null) {
+    return [];
+  }
+  for (const [key, entry] of Object.entries(pristine)) {
+    await override(key, entry);
+  }
+  await delay(600);
+  return Object.keys(pristine);
 }
 
 /**
  * Reads the canvas and reports the shape of what is drawn on it.
  *
- * Restricted to the canvas rectangle, because the panel is styled from the same palette and
- * would otherwise contribute pixels to every count.
+ * Restricted to the canvas rectangle, and the HUD is hidden for the capture. The rectangle
+ * alone is not enough: the HUD floats *over* the canvas, so its chrome lands inside the
+ * region and is counted as arena pixels. That is not hypothetical — `--accent` and `--blue`
+ * are the same hex (`#4b8fe0`), so the 收起布阵 pill, which is accent-coloured while the
+ * drawer is open, reads as a blue faction unit. The scan was measuring the stylesheet.
+ *
+ * It used to pass by luck: the top strip sat outside the canvas rectangle, because the open
+ * drawer pushed the stage inwards. Insetting the strip so the drawer stopped covering its
+ * buttons moved those pixels inside the region and the luck ran out. The premise "everything
+ * inside the canvas rect is the arena" was never true; this makes it true.
+ *
+ * Hidden and restored around the capture only — nothing here asserts anything about the HUD,
+ * and the drag test below still needs it back in the tree.
  */
 async function scan() {
+  await evaluate(`for (const el of document.querySelectorAll(".hud")) el.style.display = "none"`);
+  await delay(150);
   const captured = await send("Page.captureScreenshot", { format: "png" });
+  await evaluate(`for (const el of document.querySelectorAll(".hud")) el.style.display = ""`);
   const pixels = await evaluate(`(async () => {
     const img = new Image();
     img.src = "data:image/png;base64,${captured.data}";
@@ -284,13 +357,13 @@ async function deriveMapping() {
 
 // --- 1 & 2: flat vs isometric shape -----------------------------------------
 
-await open({ scene: "battle", view: "flat", debug: "1" });
+await open({ scene: "battle", view: "flat", debug: "1" }, { procedural: true });
 const flat = await scan();
 const flatBadge = await evaluate(
   `[...document.querySelectorAll(".app__badge")].map((b) => b.textContent).join("|")`
 );
 
-await open({ scene: "battle", view: "iso", debug: "1" });
+await open({ scene: "battle", view: "iso", debug: "1" }, { procedural: true });
 const iso = await scan();
 const isoBadge = await evaluate(
   `[...document.querySelectorAll(".app__badge")].map((b) => b.textContent).join("|")`
@@ -367,10 +440,11 @@ check(units.length >= 4, "the scene exposes its units", { count: units.length })
 /**
  * Is there a pixel of this kind within `radius` screenshot pixels of this client point?
  *
- * The radius matters and is therefore a parameter. A procedural body is a filled disc, so a
- * box the size of the unit lands on it. The demo fixture's attack slot is a *ring* — its
- * centre is background and a small pale dot — so a box the size of the unit samples the hole
- * and finds nothing, which reads exactly like "the art was not drawn".
+ * The radius matters and is therefore a parameter, because the two kinds of subject have
+ * different shapes. A procedural body is a filled disc the size of the collider, so a box the
+ * size of the unit lands on it. A character portrait is anchored at its **feet** and stands
+ * up from the projected point, so the box has to be tall enough to reach the body: the feet
+ * are the bottom edge of the sprite and are mostly transparent.
  */
 async function colourNear(clientX, clientY, kind, radiusCss = 12) {
   const shot = await send("Page.captureScreenshot", { format: "png" });
@@ -395,8 +469,12 @@ async function colourNear(clientX, clientY, kind, radiusCss = 12) {
     const matches = {
       red: (r, g, b) => r > 150 && g < 130 && b < 120 && r - g > 60,
       blue: (r, g, b) => b > 150 && r < 140 && b - r > 60,
-      // The demo fixture's attack slot: 0xffd166, the yellow ring a winding-up unit wears.
-      yellow: (r, g, b) => r > 230 && g > 180 && g < 235 && b < 140
+      // The shipped character art, for the phase that runs with the keys restored. Same two
+      // predicates as verify-appearance.mjs, and narrow for the same reason: the red side's
+      // skin #3dbf9e is g - r = 130 while the health-bar green #63c07a is 93, and the blue
+      // side's armour #5393c5 is b - g = 50 while the faction blue #4b8fe0 is 81.
+      zombieArt: (r, g, b) => g > 130 && g - r > 100 && b > 105 && b < 200 && r < 110,
+      robotArt: (r, g, b) => b > 160 && b - g > 15 && b - g < 65 && b - r > 80 && g > 110 && g < 200 && r < 130
     }[${JSON.stringify(kind)}];
     let n = 0;
     // The most "warm" pixel in the region, for when a strict threshold finds nothing and the
@@ -415,10 +493,12 @@ async function colourNear(clientX, clientY, kind, radiusCss = 12) {
 // Picked by coordinate rather than by array order, so the test does not depend on how the
 // scene was authored.
 //
-// "Has an appearance key" is not the same as "is drawn from art": every character in the
-// library carries a key, and only the ones present in the registry resolve to a bitmap. The
-// rest fall through to the procedural body, which is the appearance layer's whole point. So
-// the registry is what decides, and it is read from the page rather than assumed.
+// The registry is read from the page rather than assumed, and in this phase it is empty on
+// purpose: `open(..., { procedural: true })` pinned every shipped key to `null`, so every
+// unit falls through to the procedural body and the faction-colour predicate has something
+// to find. Asserting the registry is empty is what proves the pin took — without it, a pin
+// that silently failed would leave this check measuring the wrong pixels, which is the exact
+// failure this whole phase exists to prevent.
 const registryKeys = new Set(Object.keys(await evaluate(`window.__arenaAppearance.registry()`)));
 const drawsArt = (unit) => unit.appearance !== undefined && registryKeys.has(unit.appearance);
 
@@ -426,16 +506,15 @@ const sortedByX = [...units].sort((a, b) => a.x - b.x);
 const redUnit = sortedByX.find((u) => u.x < bounds.width / 2 && !drawsArt(u));
 const blueUnit = [...sortedByX].reverse().find((u) => u.x > bounds.width / 2 && !drawsArt(u));
 
-// `red.blade` carries the appearance fixture, so it is the useful case for the *billboard*
-// half of the claim: art is positioned by the projection but must not be squashed by it, so
-// its ring has to come out circular and centred on the projected point.
-const artUnit = units.find(drawsArt);
-
-check(redUnit !== undefined && blueUnit !== undefined, "the scene has a procedural unit per side", {
-  redUnit: redUnit && { id: redUnit.id, x: redUnit.x, y: redUnit.y },
-  blueUnit: blueUnit && { id: blueUnit.id, x: blueUnit.x, y: blueUnit.y },
-  registryKeys: [...registryKeys]
-});
+check(
+  registryKeys.size === 0 && redUnit !== undefined && blueUnit !== undefined,
+  "the scene has a procedural unit per side",
+  {
+    redUnit: redUnit && { id: redUnit.id, x: redUnit.x, y: redUnit.y },
+    blueUnit: blueUnit && { id: blueUnit.id, x: blueUnit.x, y: blueUnit.y },
+    registryKeys: [...registryKeys]
+  }
+);
 
 if (redUnit) {
   const point = toClient(redUnit.x, redUnit.y);
@@ -447,19 +526,6 @@ if (blueUnit) {
   const point = toClient(blueUnit.x, blueUnit.y);
   const hit = await colourNear(point.x, point.y, "blue");
   check(hit.n > 0, "a procedural blue unit is drawn at its projected position", { point, pixels: hit.n });
-}
-
-if (artUnit) {
-  const point = toClient(artUnit.x, artUnit.y);
-  // Wide enough to reach the ring rather than its hole: the fixture's ring sits at radius 13
-  // in a 32px texture, and the fit transform scales that up.
-  const hit = await colourNear(point.x, point.y, "yellow", 26);
-  check(hit.n > 0, "a unit drawn from art is positioned by the projection, not squashed by it", {
-    point,
-    pixels: hit.n,
-    warmest: hit.warmest,
-    unit: { id: artUnit.id, x: artUnit.x, y: artUnit.y, appearance: artUnit.appearance }
-  });
 }
 
 // --- 4: a drag lands under the cursor ---------------------------------------
@@ -514,6 +580,46 @@ if (moved) {
     "the unit lands under the cursor, so unproject is the inverse of project",
     { cursor: drag.to, landed, errorPx: Number(errorPx.toFixed(3)) }
   );
+}
+
+// --- 5: art is positioned by the projection, not squashed by it ---------------
+
+// The phases above pinned the appearance layer to procedural bodies, which is what makes the
+// faction-colour predicate trustworthy — and also what makes them silent about art. This puts
+// the shipped keys back and asks the other half of claim 3: a bitmap is *positioned* at the
+// projected point while being drawn square to the camera. Had the billboard been pushed
+// through the ground matrix it would be sheared away from that point, and the further the
+// unit sits from the origin the further off it would land.
+//
+// The box is wider than the procedural one on purpose. A portrait is anchored at its feet, so
+// the projected point is the *bottom* of the sprite and the body stands above it; a box the
+// size of the collider would sample the transparent feet and report "no art".
+//
+// The right-most art unit is chosen rather than the left-most: the diagnostics panel is a
+// left-hand overlay, and a subject underneath it would measure the stylesheet instead of the
+// sprite.
+const restoredKeys = await restoreArt();
+const artUnits = await evaluate(`window.__arenaAppearance.units()`);
+const artUnit = artUnits
+  .filter((u) => u.appearance !== undefined && restoredKeys.includes(u.appearance))
+  .map((u) => ({ unit: u, client: toClient(u.x, u.y) }))
+  .sort((a, b) => b.client.x - a.client.x)[0];
+
+check(restoredKeys.length > 0 && artUnit !== undefined, "restoring the keys puts art back on the field", {
+  restoredKeys,
+  artUnit: artUnit && { id: artUnit.unit.id, appearance: artUnit.unit.appearance }
+});
+
+if (artUnit) {
+  const kind = artUnit.unit.appearance === "toon-zombie" ? "zombieArt" : "robotArt";
+  const hit = await colourNear(artUnit.client.x, artUnit.client.y, kind, 46);
+  check(hit.n > 0, "a unit drawn from art is positioned by the projection, not squashed by it", {
+    point: artUnit.client,
+    kind,
+    pixels: hit.n,
+    warmest: hit.warmest,
+    unit: { id: artUnit.unit.id, x: artUnit.unit.x, y: artUnit.unit.y, appearance: artUnit.unit.appearance }
+  });
 }
 
 // --- report ------------------------------------------------------------------

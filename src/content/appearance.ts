@@ -23,14 +23,58 @@
 
 // --- Specs ------------------------------------------------------------------
 
+/**
+ * How an image is placed on the entity that owns it.
+ *
+ * Separate from the source, because the same file can be drawn two ways — a pose used as a
+ * head-on idle and the same pose used as a telegraph want different anchors — and shared by
+ * both slots, because both need it.
+ *
+ * Every field is optional and every default is the behaviour the greybox era already had.
+ * That is not laziness: it means turning the art phase on cannot move a unit that was already
+ * on screen. A spec that names nothing keeps drawing at its texture's own size, centred, with
+ * no flip, which is exactly what the demo fixture did.
+ */
+export interface ArtPlacement {
+  /**
+   * Normalised anchor, `0..1` of the frame.
+   *
+   * `{ x: 0.5, y: 1 }` puts the bottom centre of the image on the unit's projected position,
+   * which is where a standing character's feet are. The default — the centre — is right for a
+   * symmetric marker and wrong for a portrait: a 128-pixel figure anchored at its middle
+   * floats half its own height above the floor, and no amount of depth sorting fixes that.
+   */
+  readonly anchor?: { readonly x: number; readonly y: number };
+  /**
+   * The height the image is drawn at, in world units.
+   *
+   * Optional, and its absence is meaningful: an image with no height is drawn at one texture
+   * pixel per world unit, which is the mapping the fixtures were tuned against. Real art has
+   * to be told, because a 128-pixel portrait is not 128 world units tall — the whole arena is
+   * only a few hundred units across.
+   */
+  readonly height?: number;
+  /**
+   * How the image answers the unit's facing.
+   *
+   * `mirror` flips it horizontally when the unit points left on screen, so a pose drawn
+   * facing right reads as facing its target. `none` — the default — is for head-on art, where
+   * the flip is invisible and the branch would only be a lie about what the art can express.
+   */
+  readonly facing?: "none" | "mirror";
+}
+
 /** One image, drawn unchanged for the whole life of the entity. */
-export interface SingleFrameSpec {
+export interface SingleFrameSpec extends ArtPlacement {
   readonly kind: "single";
   /**
    * Where the image comes from.
    *
-   * `builtin:` sources are generated at runtime and ship no bytes; anything else is a path
-   * handed to PixiJS's asset loader.
+   * Two schemes, and the prefix is what tells them apart: `asset:` names a slot in the asset
+   * table — the only form a spec can use, because this module imports nothing and therefore
+   * cannot read the glob that owns the hashed paths — and anything else is a URL handed
+   * straight to PixiJS's loader, which is what the debug override uses to point a key at a
+   * file that is not there.
    */
   readonly source: string;
 }
@@ -42,7 +86,7 @@ export interface SingleFrameSpec {
  * always arrives in, it needs no metadata sidecar, and it can be sliced with one rectangle.
  * A packed atlas is a Phase 5 problem and inventing its format now would be guessing.
  */
-export interface SequenceSpec {
+export interface SequenceSpec extends ArtPlacement {
   readonly kind: "sequence";
   readonly source: string;
   readonly frameWidth: number;
@@ -55,6 +99,46 @@ export interface SequenceSpec {
 }
 
 export type AppearanceSpec = SingleFrameSpec | SequenceSpec;
+
+// --- Placement ---------------------------------------------------------------
+
+/** The anchor used when a spec does not name one: the centre of the frame. */
+export const DEFAULT_ANCHOR = { x: 0.5, y: 0.5 } as const;
+
+/**
+ * Where the image is pinned to the entity, normalised to the frame.
+ *
+ * Returns a fresh object rather than the shared default, because a PixiJS anchor is a live
+ * point: a caller that wrote to the result would otherwise corrupt the default for every
+ * other unit on the field, and the symptom would be one unit's sprite drifting while the
+ * rest stayed put — a bug with no obvious connection to its cause.
+ */
+export function anchorOf(spec: AppearanceSpec): { readonly x: number; readonly y: number } {
+  const anchor = spec.anchor;
+  return anchor ? { x: anchor.x, y: anchor.y } : { ...DEFAULT_ANCHOR };
+}
+
+/**
+ * The height to draw at, in world units.
+ *
+ * Falls back to the image's own height, which makes the resulting scale exactly 1 — the
+ * behaviour every spec had before this field existed. A non-positive or non-finite height is
+ * treated as absent rather than honoured: honouring it would scale the sprite away to
+ * nothing, and a unit that vanishes is the failure mode this module exists to make
+ * impossible.
+ */
+export function artHeight(spec: AppearanceSpec, naturalHeight: number): number {
+  const height = spec.height;
+  if (height === undefined || !Number.isFinite(height) || height <= 0) {
+    return naturalHeight;
+  }
+  return height;
+}
+
+/** Whether the image has to be flipped when the unit points left on screen. */
+export function mirrorsFacing(spec: AppearanceSpec): boolean {
+  return spec.facing === "mirror";
+}
 
 /**
  * Everything a key can draw.
@@ -70,32 +154,59 @@ export interface AppearanceEntry {
 }
 
 /**
- * The registry. **Deliberately almost empty, and that emptiness is a fact.**
+ * The registry.
  *
- * This build ships no external art: every unit, prop and projectile is drawn with PixiJS
- * primitives. The single entry below is a fixture generated at runtime from a canvas — zero
- * bytes, zero licence risk — and it exists for one reason: an adapter whose success path is
- * never executed is an adapter nobody has tested.
+ * Two entries, one per side, and both are head-on poses rather than directional art. That is
+ * a deliberate limit of this first art pass, not an oversight: the pack these came from ships
+ * one view per character, and building a four-way facing table around art that cannot express
+ * one would be a data model written for a file that does not exist.
  *
- * It is wired to a real character in `library.ts` rather than left dangling, and
- * `tests/appearance.test.mjs` asserts that every key in here is referenced by shipped
- * content. That is what stops the fixture from quietly rotting into an entry nothing draws:
- * deleting the reference turns into a failing test rather than into an untested branch.
+ * The anchor and the height are the two numbers that matter, and both were measured from the
+ * files rather than chosen by eye:
  *
- * Delete both the entry and the reference when the first real asset lands.
+ *   - **The feet sit on the bottom edge of the frame.** Every pose in the pack has an opaque
+ *     bounding box that ends at the last row, so `y: 1` puts the unit's projected position
+ *     exactly under its boots and stops a 128-pixel figure from hovering.
+ *   - **The height is in world units, not pixels.** A unit's collider is about 26 units
+ *     across; art left at its native 128 pixels would stand five times the arena's idea of a
+ *     person. 48 units draws a figure roughly one and a half colliders tall, which is what
+ *     reads as a body standing on a tile rather than as a portrait pasted over one.
+ *
+ * `attack` is mirrored and `base` is not. The strike pose is drawn facing right, so flipping
+ * it when the unit points left is what makes a wind-up read as aimed at the target rather
+ * than away from it. The idle pose is symmetric, where the flip would cost a branch and
+ * change no pixel.
  */
 const registry: Record<string, AppearanceEntry> = {
-  "demo-sequence": {
+  "toon-robot": {
     base: {
-      kind: "sequence",
-      source: "builtin:demo-walk",
-      frameWidth: 32,
-      frameHeight: 32,
-      frameCount: 6,
-      frameMs: 90,
-      loop: true
+      kind: "single",
+      source: "asset:robot-idle",
+      anchor: { x: 0.5, y: 1 },
+      height: 48
     },
-    attack: { kind: "single", source: "builtin:demo-attack" }
+    attack: {
+      kind: "single",
+      source: "asset:robot-attack",
+      anchor: { x: 0.5, y: 1 },
+      height: 48,
+      facing: "mirror"
+    }
+  },
+  "toon-zombie": {
+    base: {
+      kind: "single",
+      source: "asset:zombie-idle",
+      anchor: { x: 0.5, y: 1 },
+      height: 48
+    },
+    attack: {
+      kind: "single",
+      source: "asset:zombie-attack",
+      anchor: { x: 0.5, y: 1 },
+      height: 48,
+      facing: "mirror"
+    }
   }
 };
 
@@ -277,6 +388,22 @@ export function findAppearanceProblems(
       const at = `${key}.${slot}`;
       if (spec.source.trim().length === 0) {
         problems.push(`${at} 的 source 为空`);
+      }
+      if (spec.anchor) {
+        const { x, y } = spec.anchor;
+        if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || x > 1 || y < 0 || y > 1) {
+          problems.push(`${at} 的 anchor 必须落在 0..1`);
+        }
+      }
+      if (spec.height !== undefined && !(Number.isFinite(spec.height) && spec.height > 0)) {
+        problems.push(`${at} 的 height 必须是正数`);
+      }
+      // Widened before the comparison. The type already forbids other values, so a direct
+      // check would be unreachable as far as the compiler is concerned — and this validator's
+      // whole job is the case the compiler never sees: an entry that arrived as JSON.
+      const facing: string | undefined = spec.facing;
+      if (facing !== undefined && facing !== "none" && facing !== "mirror") {
+        problems.push(`${at} 的 facing 必须是 "none" 或 "mirror"`);
       }
       if (spec.kind === "sequence") {
         if (!Number.isInteger(spec.frameCount) || spec.frameCount < 1) {
