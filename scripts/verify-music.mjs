@@ -80,11 +80,25 @@ if (!chromeBin || !existsSync(viteBin)) {
   process.exit(1);
 }
 
+/**
+ * The dev server's own output, kept for the failure path.
+ *
+ * `stdio: "ignore"` threw away the only evidence that separates "the server never came up"
+ * from "the server came up and served something the page could not use". Bounded, because
+ * only the end of a long-lived server's output matters when something is wrong.
+ */
+let devLog = "";
 const dev = spawn(
   process.execPath,
   [viteBin, "--port", String(PORT), "--strictPort", "--host", "127.0.0.1"],
-  { cwd: ROOT, stdio: "ignore" }
+  { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] }
 );
+for (const stream of [dev.stdout, dev.stderr]) {
+  stream?.setEncoding("utf8");
+  stream?.on("data", (chunk) => {
+    devLog = (devLog + chunk).slice(-6000);
+  });
+}
 let chrome = null;
 let socket = null;
 let cleanedUp = false;
@@ -131,6 +145,10 @@ chrome = spawn(
     "--no-first-run",
     "--no-default-browser-check",
     "--disable-extensions",
+    // The page under test is on 127.0.0.1; a browser that consults a proxy to reach its own
+    // dev server is testing the proxy as much as the app, and the sweep must not depend on
+    // how the operator's machine is configured.
+    "--no-proxy-server",
     "--window-size=1440,900",
     PAGE_URL
   ],
@@ -201,7 +219,79 @@ await send("Runtime.enable");
 await send("Network.enable");
 await send("Page.enable");
 
-const deadline = Date.now() + 40_000;
+const consoleErrors = [];
+const exceptions = [];
+socket.addEventListener("message", (event) => {
+  const msg = JSON.parse(event.data);
+  if (msg.method === "Runtime.consoleAPICalled" && msg.params.type === "error") {
+    consoleErrors.push(msg.params.args.map((a) => a.value ?? a.description ?? "").join(" "));
+  }
+  if (msg.method === "Runtime.exceptionThrown") {
+    exceptions.push(msg.params.exceptionDetails.exception?.description ?? "exception");
+  }
+});
+
+/**
+ * What is actually on the other end, when the app is not.
+ *
+ * The mount check is `canvas && window.__arenaMusic`, and its failure has several causes that
+ * look identical from inside the script: a page that never loaded, a page that loaded and
+ * threw before React mounted, a `debug=1` that never reached the URL, and a CDP client
+ * attached to somebody else's browser. The last one is not hypothetical -- `findPageTarget`
+ * takes the first page target on the port, so a stale Chrome answers for a new one that never
+ * managed to bind. The target list and the server probe are what tell them apart.
+ */
+const probeServer = async (path) => {
+  try {
+    const res = await fetch(`http://127.0.0.1:${PORT}${path}`);
+    const body = await res.text();
+    return { status: res.status, body: body.slice(0, 400) };
+  } catch (error) {
+    return { error: String(error) };
+  }
+};
+
+const diagnose = async () => {
+  const out = {
+    targetUrl: target.url,
+    consoleErrors,
+    exceptions,
+    mediaRequests,
+    devServer: devLog.trim().split("\n").slice(-25)
+  };
+  try {
+    out.page = await evaluate(`({
+      href: location.href,
+      readyState: document.readyState,
+      title: document.title,
+      canvas: !!document.querySelector("canvas"),
+      music: typeof window.__arenaMusic,
+      bodyLength: document.body ? document.body.innerHTML.length : -1,
+      bodyHead: document.body ? document.body.innerHTML.slice(0, 200) : ""
+    })`);
+  } catch (error) {
+    out.page = { error: String(error) };
+  }
+  try {
+    const res = await fetch(`http://127.0.0.1:${CDP_PORT}/json/list`);
+    out.targets = (await res.json()).map((t) => ({ type: t.type, url: t.url }));
+  } catch (error) {
+    out.targets = { error: String(error) };
+  }
+  out.server = { root: await probeServer("/"), entry: await probeServer("/src/main.tsx") };
+  return out;
+};
+
+/**
+ * How long the page gets to become a running app. Generous on purpose: the sweep runs this
+ * straight after a full build and four browser verifiers, and a cold dev server on a loaded
+ * machine has been measured at 15.8 s just to print "ready" (1.2 s idle). A budget tuned to
+ * an idle machine turns machine load into a product regression.
+ */
+const MOUNT_BUDGET_MS = 90_000;
+
+const mountStartedAt = Date.now();
+const deadline = mountStartedAt + MOUNT_BUDGET_MS;
 let mounted = false;
 while (Date.now() < deadline) {
   mounted = await evaluate(`!!document.querySelector("canvas") && !!window.__arenaMusic`);
@@ -209,10 +299,11 @@ while (Date.now() < deadline) {
   await delay(300);
 }
 if (!check(mounted, "app 未挂载，或 ?debug=1 的 __arenaMusic 探针没装上")) {
-  console.log(JSON.stringify({ ok: false, failures }, null, 2));
+  console.log(JSON.stringify({ ok: false, failures, diagnosis: await diagnose() }, null, 2));
   cleanup();
   process.exit(1);
 }
+notes.push({ mountedAfterMs: Date.now() - mountStartedAt });
 
 // The help overlay covers the panel on first run.
 await evaluate(`document.querySelector(".help__footer button")?.click()`);

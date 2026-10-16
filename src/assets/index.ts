@@ -17,6 +17,14 @@
  * The directory listing below is the whole reason these are separate globs rather than one
  * glob over `assets/`: each slot has its own required extension and its own consumer, and a
  * single map would let a texture be handed to the audio loader.
+ *
+ * ⚠️ `assets/ui/` is deliberately NOT here. Those files are the HUD chrome — 9-slice panels,
+ * buttons and the display face — and the only consumer is `src/styles.css`, which reaches
+ * them with a relative `url()` that Vite rewrites through the same `base` pipeline. Routing
+ * them through a glob would mean setting CSS custom properties from JavaScript at boot, for
+ * no gain: there is no runtime lookup to protect, because the stylesheet is resolved at
+ * build time. Everything a *renderer or audio engine* loads at runtime still comes through
+ * here, which is the boundary this file actually guards.
  */
 
 /** Square, top-down, seamless ground material. See `render/ground.ts` for why square. */

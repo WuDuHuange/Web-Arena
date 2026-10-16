@@ -45,11 +45,12 @@ export interface AssetCredit {
 /**
  * Every credit currently verified.
  *
- * Four entries across the two kinds. The materials are the arena floor and the battle loop;
- * the appearances are the two character keys the unit library resolves to. Three of the four
- * are CC0 and therefore owe nothing, and they are listed anyway — the row records that the
- * licence was read, on a date, from the source, and a registry that could not tell a checked
- * asset from an unchecked one would be useless for the question it exists to answer.
+ * Five entries across the two kinds. The materials are the arena floor, the battle loop and
+ * the interface chrome; the appearances are the two character keys the unit library resolves
+ * to. Four of the five are CC0 and therefore owe nothing, and they are listed anyway — the
+ * row records that the licence was read, on a date, from the source, and a registry that
+ * could not tell a checked asset from an unchecked one would be useless for the question it
+ * exists to answer.
  *
  * ⚠️ The music row is not decoration. CC BY 4.0 requires attribution, and it requires it
  * somewhere a visitor can reach: the corner line in the HUD and the 素材署名 block both
@@ -75,6 +76,21 @@ export const ASSET_CREDITS: readonly AssetCredit[] = [
     source: "https://maou.audio/bgm_8bit27/",
     licence: "CC BY 4.0 — https://creativecommons.org/licenses/by/4.0/",
     obtained: "2026-10-13"
+  },
+  {
+    kind: "material",
+    slot: "ui.chrome",
+    /*
+     * The 9-slice panels, buttons, dividers and the display face. Recorded with the same
+     * transform as the shipped files, because the files in `src/assets/ui/` are derived:
+     * `scripts/recolor-ui.py` re-tints the pack's light-grey chrome into this palette, and a
+     * reader who compares them against kenney.nl will not find the colours they see here.
+     */
+    title: "UI Pack（面板／按钮／分隔线切片，Kenney Future 字体；经 recolor-ui.py 调色）",
+    author: "Kenney",
+    source: "https://kenney.nl/assets/ui-pack",
+    licence: "CC0 1.0 Universal — https://creativecommons.org/publicdomain/zero/1.0/",
+    obtained: "2026-10-15"
   },
   {
     kind: "appearance",

@@ -67,6 +67,7 @@ export function DeploymentEditor(props: DeploymentEditorProps): ReactElement {
             key={character.id}
             type="button"
             className="editor__chip editor__chip--red"
+            data-chip-id={character.id}
             disabled={locked}
             onClick={() => props.onAddUnit(character.id, "red")}
           >
@@ -82,6 +83,7 @@ export function DeploymentEditor(props: DeploymentEditorProps): ReactElement {
             key={character.id}
             type="button"
             className="editor__chip editor__chip--blue"
+            data-chip-id={character.id}
             disabled={locked}
             onClick={() => props.onAddUnit(character.id, "blue")}
           >
@@ -97,6 +99,7 @@ export function DeploymentEditor(props: DeploymentEditorProps): ReactElement {
             key={prop.id}
             type="button"
             className="editor__chip"
+            data-chip-id={prop.id}
             disabled={locked}
             onClick={() => props.onAddProp(prop.id)}
           >

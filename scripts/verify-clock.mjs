@@ -36,7 +36,8 @@ const readFlag = (name, fallback) => {
 const PORT = Number(readFlag("port", "5178"));
 const CDP_PORT = Number(readFlag("cdp", "9346"));
 const PAGE_URL = `http://127.0.0.1:${PORT}/?scene=battle`;
-const PROFILE = path.resolve(ROOT, ".cdp-profile");
+/* Its own profile directory: a shared one serialises the sweep behind a stale lock. */
+const PROFILE = path.resolve(ROOT, ".cdp-profile-clock");
 
 const failures = [];
 const notes = [];
@@ -79,10 +80,26 @@ if (!chromeBin || !existsSync(viteBin)) {
   process.exit(1);
 }
 
+/**
+ * The dev server's own output, kept for the failure path.
+ *
+ * `stdio: "ignore"` was the wrong default here. When the app does not mount, the one piece
+ * of evidence that separates "the server never came up" from "the server came up and served
+ * something the page could not use" is what vite printed, and discarding it is what turned a
+ * diagnosable failure into a one-line mystery. Bounded, because a server that has been
+ * running for a while can print a lot and only the end matters when something is wrong.
+ */
+let devLog = "";
 const dev = spawn(process.execPath, [viteBin, "--port", String(PORT), "--strictPort", "--host", "127.0.0.1"], {
   cwd: ROOT,
-  stdio: "ignore"
+  stdio: ["ignore", "pipe", "pipe"]
 });
+for (const stream of [dev.stdout, dev.stderr]) {
+  stream?.setEncoding("utf8");
+  stream?.on("data", (chunk) => {
+    devLog = (devLog + chunk).slice(-6000);
+  });
+}
 let chrome = null;
 let socket = null;
 let cleanedUp = false;
@@ -129,8 +146,12 @@ chrome = spawn(
     "--no-first-run",
     "--no-default-browser-check",
     "--disable-extensions",
+    // The page under test is on 127.0.0.1. A browser that consults a proxy -- any proxy --
+    // to reach its own dev server is testing the proxy as much as the app, and the sweep has
+    // no business depending on how the operator's machine is configured.
+    "--no-proxy-server",
     "--window-size=1280,800",
-    PAGE_URL
+    "about:blank"
   ],
   { cwd: ROOT, stdio: ["ignore", "ignore", "ignore"] }
 );
@@ -184,8 +205,143 @@ const evaluate = async (expression) => {
 };
 
 await send("Runtime.enable");
+await send("Network.enable");
+await send("Page.enable");
 
-const deadline = Date.now() + 40_000;
+/**
+ * The load timeline, captured from before the first byte.
+ *
+ * Chrome is launched on `about:blank` and navigated here only once the debugger is
+ * attached. Launching straight at the URL looks equivalent and is not: the debugger
+ * connects some fraction of a second into the load, so every request that has already gone
+ * out -- including the one that never comes back -- is invisible, and a page that is stuck
+ * and a page that is merely slow produce the same empty report.
+ *
+ * `outstanding` is the point of it: requests that were sent and neither finished nor
+ * failed. A hung request is not an error, so it produces no console message and no
+ * exception, which is exactly the shape of "the app is not mounted and nothing is wrong".
+ */
+const load = { domContentAt: null, loadAt: null };
+const byId = new Map();
+const outstanding = new Map();
+const netFailures = [];
+let requestCount = 0;
+socket.addEventListener("message", (event) => {
+  const msg = JSON.parse(event.data);
+  if (msg.method === "Page.domContentEventFired") load.domContentAt = Date.now();
+  if (msg.method === "Page.loadEventFired") load.loadAt = Date.now();
+  if (msg.method === "Network.requestWillBeSent") {
+    const path = msg.params.request.url.replace(`http://127.0.0.1:${PORT}`, "");
+    byId.set(msg.params.requestId, path);
+    outstanding.set(msg.params.requestId, path);
+    requestCount += 1;
+  }
+  if (msg.method === "Network.loadingFinished") {
+    outstanding.delete(msg.params.requestId);
+  }
+  if (msg.method === "Network.loadingFailed") {
+    outstanding.delete(msg.params.requestId);
+    netFailures.push({
+      url: byId.get(msg.params.requestId) ?? "?",
+      error: msg.params.errorText,
+      canceled: msg.params.canceled
+    });
+  }
+});
+
+const consoleErrors = [];
+const exceptions = [];
+socket.addEventListener("message", (event) => {
+  const msg = JSON.parse(event.data);
+  if (msg.method === "Runtime.consoleAPICalled" && msg.params.type === "error") {
+    consoleErrors.push(msg.params.args.map((a) => a.value ?? a.description ?? "").join(" "));
+  }
+  if (msg.method === "Runtime.exceptionThrown") {
+    exceptions.push(msg.params.exceptionDetails.exception?.description ?? "exception");
+  }
+});
+
+const navigatedAt = Date.now();
+await send("Page.navigate", { url: PAGE_URL });
+
+/**
+ * What is actually on the other end, when the app is not.
+ *
+ * "app 未挂载" cannot distinguish three different failures, and all three have been seen:
+ * a page that never loaded, a page that loaded and threw before React mounted, and a CDP
+ * client attached to somebody else's browser. The third is not hypothetical --
+ * `findPageTarget` takes the first page target on the port, so a stale Chrome from an
+ * earlier run answers for a new one that never managed to bind, and from inside the script
+ * that looks exactly like a page that will not mount. Hence the target list.
+ *
+ * The server probe is the other half: it asks the dev server for the entry module over
+ * plain HTTP, which is the cheapest way to see a compile error or a dependency-optimizer
+ * failure that the browser would only report as a blank page.
+ */
+const probeServer = async (path) => {
+  try {
+    const res = await fetch(`http://127.0.0.1:${PORT}${path}`);
+    const body = await res.text();
+    return { status: res.status, body: body.slice(0, 400) };
+  } catch (error) {
+    return { error: String(error) };
+  }
+};
+
+const diagnose = async () => {
+  const out = {
+    targetUrl: target.url,
+    consoleErrors,
+    exceptions,
+    load: {
+      elapsedMs: Date.now() - navigatedAt,
+      domContentAfterMs: load.domContentAt === null ? null : load.domContentAt - navigatedAt,
+      loadEventAfterMs: load.loadAt === null ? null : load.loadAt - navigatedAt,
+      requests: requestCount,
+      outstanding: [...outstanding.values()],
+      failures: netFailures
+    },
+    devServer: devLog.trim().split("\n").slice(-25)
+  };
+  try {
+    out.page = await evaluate(`({
+      href: location.href,
+      readyState: document.readyState,
+      title: document.title,
+      canvas: !!document.querySelector("canvas"),
+      bench: typeof window.__arenaBench,
+      bodyLength: document.body ? document.body.innerHTML.length : -1,
+      bodyHead: document.body ? document.body.innerHTML.slice(0, 200) : ""
+    })`);
+  } catch (error) {
+    out.page = { error: String(error) };
+  }
+  try {
+    const res = await fetch(`http://127.0.0.1:${CDP_PORT}/json/list`);
+    out.targets = (await res.json()).map((t) => ({ type: t.type, url: t.url }));
+  } catch (error) {
+    out.targets = { error: String(error) };
+  }
+  out.server = { root: await probeServer("/"), entry: await probeServer("/src/main.tsx") };
+  return out;
+};
+
+/**
+ * How long the page gets to become a running app.
+ *
+ * Deliberately generous, because the failure this replaces was machine load rather than the
+ * app. Measured on this machine: vite prints "ready" in 1.2 s when the machine is idle and
+ * in 15.8 s during the release sweep, and the page's first load pays the cold transform cost
+ * of the whole module graph on top of that. A budget tuned to an idle machine turns "the
+ * operator's machine was busy" into "the product regressed" -- and the sweep runs these
+ * scripts directly after a full build and four browser verifiers, which is the busiest this
+ * machine ever gets. A genuine hang is still caught, and `diagnose()` now names the request
+ * that never came back instead of leaving one line of Chinese behind.
+ */
+const MOUNT_BUDGET_MS = 90_000;
+
+const mountStartedAt = Date.now();
+const deadline = mountStartedAt + MOUNT_BUDGET_MS;
 let mounted = false;
 while (Date.now() < deadline) {
   mounted = await evaluate(`!!document.querySelector("canvas") && !!window.__arenaBench`);
@@ -193,10 +349,11 @@ while (Date.now() < deadline) {
   await delay(300);
 }
 if (!check(mounted, "app 未挂载")) {
-  console.log(JSON.stringify({ ok: false, failures }, null, 2));
+  console.log(JSON.stringify({ ok: false, failures, diagnosis: await diagnose() }, null, 2));
   cleanup();
   process.exit(1);
 }
+notes.push({ mountedAfterMs: Date.now() - mountStartedAt });
 
 // The help overlay covers the panel on first run.
 await evaluate(`document.querySelector(".help__footer button")?.click()`);

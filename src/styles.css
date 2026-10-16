@@ -16,6 +16,20 @@
  * the `.editor__*` tree. Rename one and a verification script silently stops asserting.
  */
 
+/*
+ * Kenney Future -- the display face, from the same CC0 UI Pack as the chrome below.
+ *
+ * Latin and digits only: the pack's font has no CJK coverage, so every Chinese string falls
+ * through to the stack in `--font-display` and stays readable. It is used on headings,
+ * numbers and button labels, which is where a game's voice lives; paragraphs keep the
+ * system face, because a decorative font at 13px is a readability tax rather than a style.
+ */
+@font-face {
+  font-family: "Kenney Future";
+  src: url("./assets/ui/KenneyFuture.ttf") format("truetype");
+  font-display: swap;
+}
+
 :root {
   color-scheme: dark;
 
@@ -26,11 +40,25 @@
   --border-strong: #3b465a;
 
   --text: #e8edf6;
-  --muted: #8d99ae;
-  --faint: #6b7688;
+  /*
+   * Both greys are lighter than they were against the old flat `--surface: #171d28`. The
+   * chrome is now a mid-slate panel rather than near-black, and the previous values sat at
+   * roughly 2.3:1 on it -- legible in a screenshot and not in use.
+   */
+  --muted: #a3b0c5;
+  --faint: #8794aa;
 
-  --accent: #4b8fe0;
-  --accent-soft: rgba(75, 143, 224, 0.16);
+  /*
+   * There is deliberately no `--accent` token any more, and its absence is the fix for a
+   * problem that outlived three sessions: it held the same hex as `--blue`, so "this control
+   * is active" and "this unit is on the blue side" were the same pixels. That started as a
+   * visual ambiguity and ended as a correctness one -- a pixel-level verifier counting blue
+   * units had to be taught to exclude the chrome, and `verify-iso` had to stop scanning the
+   * region the pill floated over.
+   *
+   * Active state is now the flat button slice plus a lighter label, so the two meanings no
+   * longer share a colour and nothing downstream has to special-case either of them.
+   */
   --red: #e0554b;
   --blue: #4b8fe0;
   --ok: #46a06a;
@@ -47,6 +75,34 @@
   --radius: 14px;
   --radius-sm: 9px;
   --gap: 10px;
+
+  /*
+   * Chrome. Kenney UI Pack (CC0), tinted into this palette by `scripts/recolor-ui.py` and
+   * applied as 9-slice `border-image`.
+   *
+   * The slice is 8: the pack's rectangles have a ~6px corner bevel and a ~6px depth band
+   * along the bottom edge, and a slice below that would cut the bevel in half on every
+   * corner. 8 also keeps the middle band non-negative on the smallest control here, which
+   * is a 30px button -- a larger slice would collapse it to zero height and the panel
+   * would lose its body colour entirely.
+   *
+   * `url()` rather than the asset glob in `src/assets/index.ts`: Vite rewrites a relative
+   * url in CSS through the same `base` pipeline as a JS import, so this is not the
+   * hand-written root-absolute runtime path that module warns about. The glob exists there
+   * because Pixi loads its URLs at runtime, where nothing else can rewrite them.
+   */
+  --ui-panel: url("./assets/ui/panel.png");
+  --ui-button: url("./assets/ui/button.png");
+  --ui-button-flat: url("./assets/ui/button-flat.png");
+  --ui-input: url("./assets/ui/input.png");
+  --ui-divider: url("./assets/ui/divider.png");
+  --ui-chip-red: url("./assets/ui/chip-red.png");
+  --ui-chip-blue: url("./assets/ui/chip-blue.png");
+  /* The body colour of `panel.png`, so a sticky header can sit on the slice without a seam. */
+  --ui-panel-body: #3a465c;
+
+  --font-display: "Kenney Future", "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui,
+    sans-serif;
 
   /* Read by the stage too, so the arena never hides underneath the open drawer. */
   --drawer-w: 336px;
@@ -163,43 +219,52 @@ body {
 
 .hud__title {
   margin: 0;
-  padding: 5px 12px;
-  border: 1px solid var(--hud-border);
-  border-radius: 999px;
-  background: var(--hud);
-  font-size: 14px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
+  padding: 8px 16px;
+  border: 0;
+  border-image: var(--ui-panel) 8 fill / 8px / 0 stretch;
+  background: transparent;
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
 
 .app__badge {
-  padding: 4px 10px;
-  border: 1px solid var(--hud-border);
-  border-radius: 999px;
-  background: var(--hud);
+  padding: 7px 12px;
+  border: 0;
+  border-image: var(--ui-input) 8 fill / 8px / 0 stretch;
+  background: transparent;
   font-size: 12px;
   color: var(--muted);
 }
 
-/* Small round HUD buttons — 声音, 说明, 布阵. */
+/* Small HUD buttons — 声音, 说明, 布阵. */
 .hud__pill {
-  padding: 5px 13px;
-  border: 1px solid var(--hud-border);
-  border-radius: 999px;
-  background: var(--hud);
+  padding: 8px 16px;
+  border: 0;
+  border-image: var(--ui-button) 8 fill / 8px / 0 stretch;
+  background: transparent;
   color: var(--text);
   font-size: 13px;
   cursor: pointer;
 }
 
 .hud__pill:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent);
+  color: #cfe0fb;
+  filter: brightness(1.18);
 }
 
+/*
+ * Pressed and toggled-on share the flat slice. The hover filter would otherwise stay on and
+ * make the "on" state indistinguishable from "the pointer happens to be here", which is the
+ * one distinction a toggle has to make.
+ */
+.hud__pill:active:not(:disabled),
 .hud__pill[aria-pressed="true"] {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-image-source: var(--ui-button-flat);
+  color: #9fc6f5;
+  filter: none;
 }
 
 /* --- Player layer: bottom ------------------------------------------------ */
@@ -220,21 +285,23 @@ body {
   display: flex;
   align-items: center;
   gap: var(--gap);
-  padding: 8px 12px;
-  border: 1px solid var(--hud-border);
-  border-radius: var(--radius);
-  background: var(--hud);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  padding: 10px 14px;
+  border: 0;
+  border-image: var(--ui-panel) 8 fill / 8px / 0 stretch;
+  background: transparent;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
 }
 
 /* The phase reads as a status light rather than as a heading. */
 .panel__phase {
   margin: 0;
-  padding: 4px 12px;
-  border-radius: 999px;
-  background: var(--surface-2);
-  font-size: 13px;
-  font-weight: 500;
+  padding: 8px 14px;
+  border: 0;
+  border-image: var(--ui-input) 8 fill / 8px / 0 stretch;
+  background: transparent;
+  font-family: var(--font-display);
+  font-size: 14px;
+  letter-spacing: 0.06em;
   white-space: nowrap;
 }
 
@@ -242,10 +309,10 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 14px;
-  border: 1px solid var(--hud-border);
-  border-radius: var(--radius);
-  background: var(--hud);
+  padding: 8px 14px;
+  border: 0;
+  border-image: var(--ui-panel) 8 fill / 8px / 0 stretch;
+  background: transparent;
   font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
@@ -277,10 +344,10 @@ body {
  */
 .hud__credit {
   margin: 0;
-  padding: 5px 11px;
-  border: 1px solid var(--hud-border);
-  border-radius: 999px;
-  background: var(--hud);
+  padding: 7px 12px;
+  border: 0;
+  border-image: var(--ui-input) 8 fill / 8px / 0 stretch;
+  background: transparent;
   font-size: 11px;
   color: var(--faint);
   white-space: nowrap;
@@ -301,15 +368,14 @@ body {
 }
 
 .hud__diag {
-  border: 1px solid var(--hud-border);
-  border-radius: var(--radius);
-  background: var(--hud);
+  border: 0;
+  border-image: var(--ui-panel) 8 fill / 8px / 0 stretch;
+  background: transparent;
   font-size: 13px;
 }
 
 .hud__diag > summary {
-  padding: 7px 14px;
-  border-radius: var(--radius);
+  padding: 8px 14px;
   color: var(--muted);
   cursor: pointer;
   list-style: none;
@@ -360,10 +426,10 @@ body {
   width: var(--drawer-w);
   padding: 0;
   overflow-y: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+  border: 0;
+  border-image: var(--ui-panel) 8 fill / 8px / 0 stretch;
+  background: transparent;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
   transition: transform 160ms ease, opacity 160ms ease;
 }
 
@@ -382,16 +448,22 @@ body {
   justify-content: space-between;
   gap: 8px;
   padding: 12px 14px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  /*
+   * Opaque, and matched to the slice's body colour: the header is sticky over a scrolling
+   * list, so anything translucent shows the rows sliding underneath it.
+   */
+  background: var(--ui-panel-body);
 }
 
 .drawer__head h2 {
   margin: 0;
-  font-size: 13px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
-  color: var(--muted);
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 400;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #b9c7e2;
 }
 
 .drawer__body {
@@ -411,11 +483,18 @@ body {
 
 .panel__block h2 {
   margin: 0 0 10px;
-  font-size: 12px;
-  font-weight: 500;
+  padding-bottom: 7px;
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 400;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--muted);
+  letter-spacing: 0.16em;
+  color: #a9b8d4;
+  /* The pack's own divider, repeated along the baseline instead of a 1px CSS rule. */
+  background-image: var(--ui-divider);
+  background-repeat: repeat-x;
+  background-position: left bottom;
+  background-size: auto 3px;
 }
 
 .panel__buttons {
@@ -431,36 +510,64 @@ body {
 }
 
 .panel__speed button {
-  padding: 4px 9px;
+  padding: 6px 10px;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
 .panel__speed button.is-active {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent);
+  border-image-source: var(--ui-button-flat);
+  color: #9fc6f5;
+  filter: none;
 }
 
 button {
-  padding: 6px 13px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
+  padding: 8px 15px;
+  border: 0;
+  border-image: var(--ui-button) 8 fill / 8px / 0 stretch;
+  background: transparent;
   color: var(--text);
-  font-family: inherit;
+  font-family: var(--font-display);
   font-size: 13px;
+  letter-spacing: 0.05em;
   cursor: pointer;
 }
 
+/*
+ * Hover brightens the whole slice rather than recolouring a border. `filter` is the only
+ * thing that reaches a `border-image` -- `border-color` has no effect on one, so the old
+ * hover rule would have compiled and done nothing at all.
+ */
 button:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent);
+  color: #cfe0fb;
+  filter: brightness(1.18);
+}
+
+/* The press is the flat slice, which is the same silhouette with the depth band removed. */
+button:active:not(:disabled) {
+  border-image-source: var(--ui-button-flat);
+  filter: none;
+}
+
+/*
+ * 开战 is the one action the whole screen is waiting for, so it gets the blue slice. The
+ * transport is otherwise four identical grey buttons, and the one that starts the battle
+ * should not have to be found by reading.
+ */
+.panel__start:not(:disabled) {
+  border-image-source: var(--ui-chip-blue);
+  color: #fff;
+}
+
+.panel__start:not(:disabled):hover {
+  color: #fff;
+  filter: brightness(1.2);
 }
 
 button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+  filter: saturate(0.5);
 }
 
 /* --- Readouts ------------------------------------------------------------ */
@@ -508,15 +615,28 @@ button:disabled {
   font-size: 13px;
 }
 
+/*
+ * One row per unit: the name and its cost on top, the attack method and the flavour line
+ * underneath. The blurb is the reason the row is two lines rather than one -- a roster that
+ * prints only 腐爪 and 2 is a table, and the point of the rename was that the units read as
+ * things rather than as rows.
+ */
 .panel__roster li {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.panel__roster li:last-child {
+  border-bottom: 0;
 }
 
 .roster__dot {
   width: 9px;
   height: 9px;
+  margin-top: 5px;
   border-radius: 50%;
   flex: none;
 }
@@ -533,20 +653,59 @@ button:disabled {
   background: #9aa4b2;
 }
 
+.roster__main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+
+.roster__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.roster__name {
+  font-family: var(--font-display);
+  font-size: 14px;
+  letter-spacing: 0.06em;
+}
+
 .roster__tag {
-  margin-left: 6px;
-  padding: 0 6px;
+  padding: 1px 6px;
   border: 1px solid var(--border-strong);
-  border-radius: 999px;
+  border-radius: 3px;
   color: var(--muted);
-  font-size: 11px;
-  line-height: 16px;
+  font-size: 10px;
+  line-height: 14px;
 }
 
 .roster__cost {
   margin-left: auto;
-  color: var(--faint);
+  font-family: var(--font-display);
+  font-size: 14px;
   font-variant-numeric: tabular-nums;
+  color: #8fa6c8;
+}
+
+.roster__blurb {
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: #9dabc2;
+}
+
+.roster__ability {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: rgba(120, 150, 200, 0.18);
+  color: #9fb6d8;
+  font-size: 10px;
+  line-height: 15px;
+  white-space: nowrap;
 }
 
 .panel__note {
@@ -737,10 +896,10 @@ button:disabled {
 .help__card {
   width: min(760px, 100%);
   padding: 28px 32px 24px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+  border: 0;
+  border-image: var(--ui-panel) 8 fill / 8px / 0 stretch;
+  background: transparent;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6);
 }
 
 .help__header {
@@ -749,9 +908,11 @@ button:disabled {
 
 .help__header h2 {
   margin: 0;
-  font-size: 22px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
 
 .help__subtitle {
@@ -766,11 +927,17 @@ button:disabled {
 
 .help__section h3 {
   margin: 0 0 8px;
-  font-size: 12px;
-  font-weight: 500;
+  padding-bottom: 6px;
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 400;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--muted);
+  letter-spacing: 0.14em;
+  color: #a9b8d4;
+  background-image: var(--ui-divider);
+  background-repeat: repeat-x;
+  background-position: left bottom;
+  background-size: auto 3px;
 }
 
 .help__section p {
@@ -845,18 +1012,21 @@ button:disabled {
   display: flex;
   gap: 10px;
   padding-top: 18px;
-  border-top: 1px solid var(--border);
+  background-image: var(--ui-divider);
+  background-repeat: repeat-x;
+  background-position: left top;
+  background-size: auto 3px;
 }
 
+/* The primary action gets the blue slice, so the way out of the modal is the loud one. */
 .help__footer button:first-child {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-image-source: var(--ui-chip-blue);
   color: #fff;
 }
 
 .help__footer button:first-child:hover:not(:disabled) {
   color: #fff;
-  opacity: 0.9;
+  filter: brightness(1.2);
 }
 
 /* --- Deployment editor --------------------------------------------------- */
@@ -888,27 +1058,35 @@ button:disabled {
 }
 
 .editor__chip {
-  padding: 4px 9px;
-  border-radius: 999px;
+  padding: 6px 11px;
   font-size: 12px;
 }
 
-.editor__chip--red:hover:not(:disabled) {
-  border-color: var(--red);
-  color: var(--red);
+/*
+ * The two factions get the two tinted slices. The chip already sits in a 红方/蓝方 group, so
+ * the colour is redundant as information -- it is there because a palette of identical grey
+ * buttons is the thing that made this read as a form rather than as a roster.
+ */
+.editor__chip--red {
+  border-image-source: var(--ui-chip-red);
 }
 
+.editor__chip--blue {
+  border-image-source: var(--ui-chip-blue);
+}
+
+.editor__chip--red:hover:not(:disabled),
 .editor__chip--blue:hover:not(:disabled) {
-  border-color: var(--blue);
-  color: var(--blue);
+  color: #fff;
+  filter: brightness(1.22);
 }
 
 .editor__inspector {
   margin-top: 12px;
   padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
+  border: 0;
+  border-image: var(--ui-input) 8 fill / 8px / 0 stretch;
+  background: transparent;
 }
 
 .editor__selected {

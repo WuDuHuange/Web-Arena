@@ -18,6 +18,7 @@ import {
   findUnregisteredAppearances
 } from "../src/content/credits.ts";
 import { APPEARANCE_REGISTRY } from "../src/content/appearance.ts";
+import { CHARACTER_LIBRARY } from "../src/content/library.ts";
 
 const VALID_DEPLOYMENT = {
   seed: 7,
@@ -277,6 +278,18 @@ test("the battle loop is registered with its attribution obligation intact", () 
   assert.match(music.licence, /CC BY 4\.0/);
   assert.match(music.author, /魔王魂/);
   assert.match(music.source, /^https:\/\/maou\.audio\//);
+});
+
+test("every shipped unit carries a blurb, because the roster renders one", () => {
+  // The 兵装 roster prints `blurb` on its second line. A missing one does not throw -- React
+  // renders nothing -- so the failure mode is a row that quietly loses its description and a
+  // unit that reads as a stat line again, which is the exact thing the field exists to stop.
+  for (const character of CHARACTER_LIBRARY) {
+    assert.ok(
+      typeof character.blurb === "string" && character.blurb.trim().length > 0,
+      `character "${character.id}" ships without a blurb`
+    );
+  }
 });
 
 test("every shipped appearance key has an appearance-kind credit", () => {

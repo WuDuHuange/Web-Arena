@@ -1068,6 +1068,7 @@ export function App() {
           <div className="panel__buttons">
             <button
               type="button"
+              className="panel__start"
               onClick={handleStart}
               disabled={phase !== "editing" || !canStart}
               title={canStart ? undefined : readiness.reason || "布阵有未解决的问题"}
@@ -1254,21 +1255,37 @@ export function App() {
           <section className="panel__block">
             <h2>兵装</h2>
             <ul className="panel__roster">
-              {CONTENT_LIBRARY.characters.map((character) => (
-                <li key={character.id}>
-                  <span className={`roster__dot roster__dot--${character.id.split(".")[0]}`} />
-                  {character.name}
-                  {/* Tags sit next to the name rather than behind a tooltip: three of the
-                      eight units carry one, and a player who never learns which three are
-                      armoured has no way to read the battle. */}
-                  {(character.tags ?? []).map((tag) => (
-                    <span className="roster__tag" key={tag}>
-                      {TAG_LABELS[tag] ?? tag}
+              {CONTENT_LIBRARY.characters.map((character) => {
+                // The ability is the unit's attack method, and it is the half of the pair a
+                // player cannot guess from the name -- 腐爪 says "zombie", 撕咬 says what it
+                // does. The first id in the rotation is the whole rotation today.
+                const ability = CONTENT_LIBRARY.abilities.find(
+                  (a) => a.id === character.abilityIds[0]
+                );
+                return (
+                  <li key={character.id}>
+                    <span className={`roster__dot roster__dot--${character.id.split(".")[0]}`} />
+                    <span className="roster__main">
+                      <span className="roster__head">
+                        <span className="roster__name">{character.name}</span>
+                        {/* Tags sit next to the name rather than behind a tooltip: three of
+                            the eight units carry one, and a player who never learns which
+                            three are armoured has no way to read the battle. */}
+                        {(character.tags ?? []).map((tag) => (
+                          <span className="roster__tag" key={tag}>
+                            {TAG_LABELS[tag] ?? tag}
+                          </span>
+                        ))}
+                        <span className="roster__cost">{character.cost}</span>
+                      </span>
+                      <span className="roster__blurb">
+                        <span className="roster__ability">{ability?.name ?? "—"}</span>
+                        {character.blurb}
+                      </span>
                     </span>
-                  ))}
-                  <span className="roster__cost">{character.cost}</span>
-                </li>
-              ))}
+                  </li>
+                );
+              })}
             </ul>
           </section>
 

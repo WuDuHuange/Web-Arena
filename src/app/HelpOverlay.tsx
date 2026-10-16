@@ -153,7 +153,7 @@ export function HelpOverlay({ fixedStepMs, onClose, onDismissForever }: HelpOver
       <div className="help__card">
         <header className="help__header">
           <h2 id="help-title">Project Arena</h2>
-          <p className="help__subtitle">2D 顶视角自动战斗沙盒</p>
+          <p className="help__subtitle">僵尸对机械 · 自动战斗沙盒</p>
         </header>
 
         <section className="help__section">

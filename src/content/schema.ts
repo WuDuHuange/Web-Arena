@@ -25,6 +25,16 @@ export interface CharacterDef {
   readonly id: string;
   readonly name: string;
   /**
+   * One line of flavour, shown wherever the unit is listed.
+   *
+   * Deliberately *not* generated from the numbers. A generated line ("近战 · 单体 · 14 伤害")
+   * is a second copy of the stats table, and it goes stale the moment a number moves; the
+   * roster already prints the stats. This is the sentence a player reads to know what the
+   * unit *is* -- and it is the only place the fiction is allowed to live, which is why it
+   * is a separate field rather than something the renderer infers from `appearance`.
+   */
+  readonly blurb?: string;
+  /**
    * Ability rotation, in order. The combat system walks this list and loops, so a
    * character's attack pattern is pure data.
    */

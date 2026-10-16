@@ -17,6 +17,16 @@ import type { BuffSpec } from "../simulation/types.ts";
  * Blue mirrors red with the same four geometries and slightly different numbers, which is
  * what makes a mirror match read as asymmetric rather than random.
  *
+ * The two sides are drawn from the art they are shipped with: red is the zombie sheet,
+ * blue is the robot sheet, and the names, the ability names and the one-line blurbs all
+ * follow from that rather than from the archetype. `blade` is a rotten claw because a
+ * zombie does not carry a sword.
+ *
+ * **Ids are the contract; names are presentation.** `red.blade` and
+ * `ability.blade.strike` are what a saved formation and an imported JSON file contain, so
+ * they stay English and stable even though every string a player reads is now themed.
+ * Renaming an id would silently invalidate every file a player had already exported.
+ *
  * Everything here is balance scaffolding, not tuned design: the numbers are chosen so a
  * battle resolves in tens of seconds and so each archetype's strengths are visible.
  *
@@ -45,10 +55,10 @@ export const TAG_LABELS: Readonly<Record<string, string>> = {
 
 const bladeAbility: AbilityDef = {
   id: "ability.blade.strike",
-  name: "斩击",
+  name: "撕咬",
   spec: {
     id: "ability.blade.strike",
-    name: "斩击",
+    name: "撕咬",
     geometry: { kind: "melee", range: 18 },
     windupTicks: 18,
     activeTicks: 2,
@@ -61,10 +71,10 @@ const bladeAbility: AbilityDef = {
 
 const lancerAbility: AbilityDef = {
   id: "ability.lancer.thrust",
-  name: "突刺",
+  name: "贯穿",
   spec: {
     id: "ability.lancer.thrust",
-    name: "突刺",
+    name: "贯穿",
     // A long thin line: punishing in a corridor, easy to sidestep in the open.
     geometry: { kind: "line", range: 150, width: 16 },
     windupTicks: 26,
@@ -79,10 +89,10 @@ const lancerAbility: AbilityDef = {
 
 const casterAbility: AbilityDef = {
   id: "ability.caster.sweep",
-  name: "横扫",
+  name: "瘴气喷吐",
   spec: {
     id: "ability.caster.sweep",
-    name: "横扫",
+    name: "瘴气喷吐",
     // 60 degrees either side: forgiving, but each individual hit is weaker.
     geometry: { kind: "cone", range: 94, halfAngle: Math.PI / 3 },
     windupTicks: 24,
@@ -96,10 +106,10 @@ const casterAbility: AbilityDef = {
 
 const bomberAbility: AbilityDef = {
   id: "ability.bomber.burst",
-  name: "爆裂",
+  name: "自爆",
   spec: {
     id: "ability.bomber.burst",
-    name: "爆裂",
+    name: "自爆",
     // Centred on the caster, so a bomber must walk into the crowd to be effective.
     geometry: { kind: "circle", range: 76, centredOnCaster: true },
     windupTicks: 40,
@@ -114,10 +124,10 @@ const bomberAbility: AbilityDef = {
 
 const skirmisherAbility: AbilityDef = {
   id: "ability.skirmisher.flurry",
-  name: "乱击",
+  name: "速斩",
   spec: {
     id: "ability.skirmisher.flurry",
-    name: "乱击",
+    name: "速斩",
     // Fast cycle, low damage: wins by attacking often rather than by hitting hard.
     geometry: { kind: "melee", range: 16 },
     windupTicks: 10,
@@ -131,10 +141,10 @@ const skirmisherAbility: AbilityDef = {
 
 const hexerAbility: AbilityDef = {
   id: "ability.hexer.lance",
-  name: "咒枪",
+  name: "穿甲弹",
   spec: {
     id: "ability.hexer.lance",
-    name: "咒枪",
+    name: "穿甲弹",
     geometry: { kind: "line", range: 180, width: 12 },
     windupTicks: 34,
     activeTicks: 2,
@@ -151,10 +161,10 @@ const hexerAbility: AbilityDef = {
 
 const shriekerAbility: AbilityDef = {
   id: "ability.shrieker.wail",
-  name: "尖啸",
+  name: "声波冲击",
   spec: {
     id: "ability.shrieker.wail",
-    name: "尖啸",
+    name: "声波冲击",
     geometry: { kind: "cone", range: 120, halfAngle: Math.PI / 2.6 },
     windupTicks: 30,
     activeTicks: 3,
@@ -170,10 +180,10 @@ const shriekerAbility: AbilityDef = {
 
 const runeAbility: AbilityDef = {
   id: "ability.rune.sigil",
-  name: "符文",
+  name: "轨道轰击",
   spec: {
     id: "ability.rune.sigil",
-    name: "符文",
+    name: "轨道轰击",
     // Aimed rather than self-centred: reaches the enemy line without walking into it.
     geometry: { kind: "circle", range: 64, centredOnCaster: false },
     windupTicks: 44,
@@ -200,7 +210,8 @@ export const CHARACTER_LIBRARY: readonly CharacterDef[] = [
   // --- Red ---------------------------------------------------------------
   {
     id: "red.blade",
-    name: "赤刃",
+    name: "腐爪",
+    blurb: "扑上去就咬。出手最快，但只够得着眼前一个。",
     abilityIds: ["ability.blade.strike"],
     cost: 2,
     appearance: "toon-zombie",
@@ -212,7 +223,8 @@ export const CHARACTER_LIBRARY: readonly CharacterDef[] = [
   },
   {
     id: "red.lancer",
-    name: "赤枪",
+    name: "骨矛",
+    blurb: "把骨头掷出去。一条直线穿到底，站成一列就是送。",
     abilityIds: ["ability.lancer.thrust"],
     cost: 3,
     appearance: "toon-zombie",
@@ -224,7 +236,8 @@ export const CHARACTER_LIBRARY: readonly CharacterDef[] = [
   },
   {
     id: "red.caster",
-    name: "赤术",
+    name: "疫囊",
+    blurb: "鼓胀的毒囊。喷出的瘴气罩住整个前方，单下不重。",
     abilityIds: ["ability.caster.sweep"],
     cost: 3,
     appearance: "toon-zombie",
@@ -236,7 +249,8 @@ export const CHARACTER_LIBRARY: readonly CharacterDef[] = [
   },
   {
     id: "red.bomber",
-    name: "赤爆",
+    name: "胀尸",
+    blurb: "装甲肥尸，全场最慢；倒下的地方会炸开一片。",
     abilityIds: ["ability.bomber.burst"],
     cost: 4,
     appearance: "toon-zombie",
@@ -254,7 +268,8 @@ export const CHARACTER_LIBRARY: readonly CharacterDef[] = [
   // --- Blue --------------------------------------------------------------
   {
     id: "blue.skirmisher",
-    name: "苍锋",
+    name: "蜂刺",
+    blurb: "轻装突击单元，用血量换出手次数。",
     abilityIds: ["ability.skirmisher.flurry"],
     cost: 2,
     appearance: "toon-robot",
@@ -269,7 +284,8 @@ export const CHARACTER_LIBRARY: readonly CharacterDef[] = [
   },
   {
     id: "blue.hexer",
-    name: "苍咒",
+    name: "磁轨",
+    blurb: "磁轨长枪。全场最远的一击，打中还会拖慢对方。",
     abilityIds: ["ability.hexer.lance"],
     cost: 3,
     appearance: "toon-robot",
@@ -281,7 +297,8 @@ export const CHARACTER_LIBRARY: readonly CharacterDef[] = [
   },
   {
     id: "blue.shrieker",
-    name: "苍啸",
+    name: "共鸣",
+    blurb: "声波阵列。扇面覆盖很宽，命中后削弱对方输出。",
     abilityIds: ["ability.shrieker.wail"],
     cost: 3,
     appearance: "toon-robot",
@@ -293,7 +310,8 @@ export const CHARACTER_LIBRARY: readonly CharacterDef[] = [
   },
   {
     id: "blue.rune",
-    name: "苍印",
+    name: "浮炮",
+    blurb: "悬浮炮台，隔着半场就能开火；地面机关从它脚下穿过。",
     abilityIds: ["ability.rune.sigil"],
     cost: 4,
     appearance: "toon-robot",

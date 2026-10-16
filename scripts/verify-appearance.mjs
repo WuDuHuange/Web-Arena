@@ -324,9 +324,9 @@ async function scan() {
         } else if (b > 160 && b - g > 15 && b - g < 65 && b - r > 80 && g > 110 && g < 200 && r < 130) {
           // The robot's armour, #5393c5. Two clauses are doing exclusion work:
           //
-          //   b - g < 65  keeps out #4b8fe0, the blue faction colour, which is also the
-          //               accent. Without it a blue unit's facing marker would read as robot
-          //               art and the "no art authored" step would pass with a sprite on screen.
+          //   b - g < 65  keeps out #4b8fe0, the blue faction colour. Without it a blue
+          //               unit's facing marker would read as robot art and the "no art
+          //               authored" step would pass with a sprite on screen.
           //   b - g > 15  keeps out the near-grey facing marker #e8edf7 (b - g = 10).
           //   g < 200     keeps out the prop glows #7fd4e8 (g = 212) and #c792ea (b - g = 88).
           robot += 1;

@@ -243,9 +243,14 @@ async function restoreArt() {
  *
  * Restricted to the canvas rectangle, and the HUD is hidden for the capture. The rectangle
  * alone is not enough: the HUD floats *over* the canvas, so its chrome lands inside the
- * region and is counted as arena pixels. That is not hypothetical — `--accent` and `--blue`
- * are the same hex (`#4b8fe0`), so the 收起布阵 pill, which is accent-coloured while the
- * drawer is open, reads as a blue faction unit. The scan was measuring the stylesheet.
+ * region and is counted as arena pixels. The scan was measuring the stylesheet.
+ *
+ * The leak was found, rather than reasoned about, because the 收起布阵 pill happened to be
+ * painted in exactly the blue faction colour -- the stylesheet carried one token for "this
+ * control is active" and for "this unit is on the blue side". That token is gone now, but the
+ * leak was never about that one colour: any chrome drifting over the canvas rectangle gets
+ * counted. Hiding the HUD is what actually fixes it, and it is why this is not a filter on
+ * the predicate.
  *
  * It used to pass by luck: the top strip sat outside the canvas rectangle, because the open
  * drawer pushed the stage inwards. Insetting the strip so the drawer stopped covering its

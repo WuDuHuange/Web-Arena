@@ -164,10 +164,13 @@ const clickButton = (label) =>
        .find((b) => b.textContent.trim() === ${JSON.stringify(label)})?.click(), "clicked"`
   );
 
-const clickChip = (name) =>
+// Selected by `data-chip-id`, not by the label on the button. The label is content and the
+// content is allowed to change -- the units were renamed once already -- and a script that
+// matches on it fails for a reason that has nothing to do with what it is testing.
+const clickChip = (id) =>
   evaluate(
     `[...document.querySelectorAll(".editor__chip")]
-       .find((b) => b.textContent.includes(${JSON.stringify(name)}))?.click(), "clicked"`
+       .find((b) => b.dataset.chipId === ${JSON.stringify(id)})?.click(), "clicked"`
   );
 
 const readEditor = () => evaluate(`(() => {
@@ -266,7 +269,7 @@ step("cleared field refuses to start", {
 });
 
 // 2. One side only is still refused, with the side named.
-await clickChip("赤刃");
+await clickChip("red.blade");
 await delay(250);
 const oneSide = await readEditor();
 const redAt = parseCoords(oneSide.selected[0]);
@@ -279,7 +282,7 @@ step("one side is refused and the new unit is selected", {
 });
 
 // 3. Both sides: fightable.
-await clickChip("苍锋");
+await clickChip("blue.skirmisher");
 await delay(250);
 const twoSides = await readEditor();
 const blueAt = parseCoords(twoSides.selected[0]);
@@ -346,7 +349,7 @@ step("dragging apart clears the refusal", {
 });
 
 // 8. Add a mechanism and confirm it counts.
-await clickChip("熔岩");
+await clickChip("prop.lava");
 await delay(250);
 const withProp = await readEditor();
 step("adding a mechanism updates the summary", { summary: withProp.summary });
