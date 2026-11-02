@@ -1,6 +1,5 @@
 import Matter from "matter-js";
-import type { Entity } from "../simulation/types.ts";
-import type { World } from "../simulation/world.ts";
+import type { PhysicsEntity, PhysicsWorld } from "./port.ts";
 
 export interface PhysicsBounds {
   readonly width: number;
@@ -53,7 +52,7 @@ export class PhysicsAdapter {
    * every entity on every shot fired, and it also re-pushes positions, which would undo a
    * step that has already been taken this tick.
    */
-  spawn(world: World): void {
+  spawn(world: PhysicsWorld): void {
     for (const entity of world.all()) {
       if (this.bodies.has(entity.id)) {
         continue;
@@ -63,7 +62,7 @@ export class PhysicsAdapter {
   }
 
   /** Creates missing bodies and pushes authoritative positions into Matter. */
-  sync(world: World): void {
+  sync(world: PhysicsWorld): void {
     for (const entity of world.all()) {
       const existing = this.bodies.get(entity.id);
       if (existing) {
@@ -84,7 +83,7 @@ export class PhysicsAdapter {
     }
   }
 
-  private createBody(entity: Entity): void {
+  private createBody(entity: PhysicsEntity): void {
     const isDynamic = !entity.collider.fixed;
     const body = Matter.Bodies.circle(
       entity.transform.position.x,
@@ -128,7 +127,7 @@ export class PhysicsAdapter {
    * created with and the entity appears frozen while reporting a perfectly sensible
    * intent.
    */
-  applyVelocities(world: World): void {
+  applyVelocities(world: PhysicsWorld): void {
     for (const entity of world.all()) {
       if (entity.collider.fixed) {
         continue;
@@ -163,7 +162,7 @@ export class PhysicsAdapter {
   }
 
   /** Copies Matter's resolved motion back into the authoritative world. */
-  writeBack(world: World): void {
+  writeBack(world: PhysicsWorld): void {
     for (const entity of world.all()) {
       // A kinematic mover owns its own transform and velocity: it is in the physics world
       // only so other bodies can be pushed aside by it, never so the solver can move it.

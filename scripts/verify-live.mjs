@@ -18,6 +18,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -31,8 +32,9 @@ const outFlag = args.find((a) => a.startsWith("--out="));
 const outPath = path.resolve(ROOT, outFlag ? outFlag.slice(6) : "outputs/live-pages.png");
 
 const PORT = Number((args.find((a) => a.startsWith("--port=")) ?? "--port=9345").slice(7));
-// `.cdp-profile` is the gitignored scratch name the other CDP scripts already use.
-const PROFILE = path.resolve(ROOT, ".cdp-profile");
+// Scratch, not project state. It belongs in the system temp directory, where the OS
+// reclaims it, rather than in the repo where `.gitignore` has to defend against it.
+const PROFILE = path.join(os.tmpdir(), "project-arena-cdp-live");
 
 function findChrome() {
   const candidates = [

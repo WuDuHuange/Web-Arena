@@ -7,7 +7,7 @@
  * a missing cue when an entity leaves the world, or one cue per victim when an AoE hits
  * twenty units at once and floods the mixer.
  *
- * Run with: npm run test:audio
+ * Run with: npm run test:single -- tests/audio.test.mjs
  */
 import assert from "node:assert/strict";
 import test from "node:test";

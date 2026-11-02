@@ -22,6 +22,7 @@
  */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -35,7 +36,10 @@ const PORT = Number(readFlag("port", "5181"));
 const CDP_PORT = Number(readFlag("cdp", "9347"));
 /** `debug=1` is what installs `window.__arenaMusic`; see App.tsx. */
 const PAGE_URL = `http://127.0.0.1:${PORT}/?scene=battle&debug=1`;
-const PROFILE = path.resolve(ROOT, ".cdp-profile-music");
+// Scratch, not project state -- a run writes 140+ MB of Chrome cache here. It belongs in
+// the system temp directory, where the OS reclaims it, rather than in the repo where
+// `.gitignore` has to defend against a `git add -f`.
+const PROFILE = path.join(os.tmpdir(), "project-arena-cdp-music");
 
 const failures = [];
 const notes = [];

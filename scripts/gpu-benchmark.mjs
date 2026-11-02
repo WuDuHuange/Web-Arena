@@ -24,10 +24,9 @@
  * (which differs per install) or to stop needing it. Node is already the one runtime this
  * project cannot do without, and it removes a whole class of bugs on the way:
  *
- *   - `path.resolve()` returns a native path, so the profile lands at
- *     `C:\course_task\projectArena\.bench-chrome-gpu` and never at `C:\c\...`. The old
- *     script needed `cygpath` for exactly this, and silently leaked 68 MB per run when it
- *     was missing.
+ *   - `path.resolve()` returns a native path, so the profile lands where `os.tmpdir()`
+ *     says and never at `C:\c\...`. The old script needed `cygpath` for exactly this,
+ *     and silently leaked 68 MB per run when it was missing.
  *   - `SECONDS` is a bash special variable. `SECONDS=8 npm run bench:gpu` set the
  *     environment, then bash reset it to 0 on startup, so the old script measured for
  *     zero seconds and reported whatever the hook had collected. Node has no such trap;
@@ -36,6 +35,7 @@
  */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -48,7 +48,12 @@ const SECONDS_PER_SCENE = Number(process.env.BENCH_SECONDS ?? process.env.SECOND
 const SCENES = (process.env.BENCH_SCENES ?? process.env.SCENES ?? "battle mechanism stress")
   .split(/[\s,]+/)
   .filter(Boolean);
-const PROFILE_DIR = process.env.BENCH_PROFILE_DIR ?? ".bench-chrome-gpu";
+// Chrome's user-data directory is scratch, not project state: one run writes 66+ MB of
+// cache into it. It lives in the system temp directory so the repo never carries a
+// browser profile and `.gitignore` does not have to defend against one.
+// `BENCH_PROFILE_DIR` still overrides it, and `path.resolve` handles both forms.
+const PROFILE_DIR =
+  process.env.BENCH_PROFILE_DIR ?? path.join(os.tmpdir(), "project-arena-gpu-bench");
 
 if (!Number.isFinite(SECONDS_PER_SCENE) || SECONDS_PER_SCENE <= 0) {
   console.error(`BENCH_SECONDS 必须是正数，收到 ${SECONDS_PER_SCENE}。`);

@@ -24,6 +24,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -51,7 +52,10 @@ const PORT = Number(readFlag("port", "5179"));
  */
 const CDP_PORT = Number(readFlag("cdp", "9348"));
 /* Per-port, so a run cannot collide with a previous one's profile lock either. */
-const PROFILE = path.resolve(ROOT, `.cdp-profile-hud-${CDP_PORT}`);
+// Scratch, not project state -- a run writes 90-270 MB of Chrome cache here. It belongs
+// in the system temp directory, where the OS reclaims it, rather than in the repo where
+// `.gitignore` has to defend against a `git add -f`.
+const PROFILE = path.join(os.tmpdir(), `project-arena-cdp-hud-${CDP_PORT}`);
 const PAGE_URL = `http://127.0.0.1:${PORT}/?scene=${SCENE}&view=${VIEW}&debug=1`;
 
 function findChrome() {

@@ -6,7 +6,7 @@
  * cheap to get subtly wrong, and both fail in the same unpleasant way — the problem is not
  * reported where it happened.
  *
- * Run with: npm run test:release
+ * Run with: npm run test:single -- tests/release.test.mjs
  */
 import assert from "node:assert/strict";
 import test from "node:test";

@@ -17,7 +17,7 @@
  *      replay starts diverging, so a seeded battle with buffs in play is asserted
  *      bit-for-bit.
  *
- * Run with: npm run test:effects
+ * Run with: npm run test:single -- tests/effects.test.mjs
  */
 import assert from "node:assert/strict";
 import test from "node:test";

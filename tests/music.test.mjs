@@ -8,7 +8,7 @@
  * wrong answer is invisible until someone notices the music started at the wrong moment,
  * kept playing after 重置, or took the battle loop down with it.
  *
- * Run with: npm run test:music
+ * Run with: npm run test:single -- tests/music.test.mjs
  */
 import assert from "node:assert/strict";
 import test from "node:test";

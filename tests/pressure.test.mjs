@@ -5,7 +5,7 @@
  * modes the architecture document promised to rule out, plus a few numeric sanity
  * bounds that catch a solver silently going unstable.
  *
- * Run with: npm run test:pressure
+ * Run with: npm run test:single -- tests/pressure.test.mjs
  */
 import assert from "node:assert/strict";
 import test from "node:test";

@@ -7,7 +7,7 @@
  * stay paused looks exactly like a battle that never paused, and one that stays frozen after
  * a tab switch looks exactly like a hung renderer.
  *
- * Run with: npm run test:attention
+ * Run with: npm run test:single -- tests/attention.test.mjs
  */
 import assert from "node:assert/strict";
 import test from "node:test";

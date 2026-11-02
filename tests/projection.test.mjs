@@ -16,7 +16,7 @@
  * screen actually shows a diamond, and that clicking still selects the unit under the
  * cursor — is `scripts/verify-iso.mjs`, because it needs a canvas.
  *
- * Run with: npm run test:projection
+ * Run with: npm run test:single -- tests/projection.test.mjs
  */
 
 import assert from "node:assert/strict";

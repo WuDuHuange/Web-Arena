@@ -7,7 +7,7 @@
  * the second, and `isDecided` calls the third over before anything happens. So they are
  * refused before the battle, and this file is what proves they are.
  *
- * Run with: npm run test:editor
+ * Run with: npm run test:single -- tests/editor.test.mjs
  */
 import assert from "node:assert/strict";
 import test from "node:test";

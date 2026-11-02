@@ -24,6 +24,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -37,7 +38,10 @@ const PORT = Number(readFlag("port", "5178"));
 const CDP_PORT = Number(readFlag("cdp", "9346"));
 const PAGE_URL = `http://127.0.0.1:${PORT}/?scene=battle`;
 /* Its own profile directory: a shared one serialises the sweep behind a stale lock. */
-const PROFILE = path.resolve(ROOT, ".cdp-profile-clock");
+// Scratch, not project state -- a run writes 100+ MB of Chrome cache here. It belongs in
+// the system temp directory, where the OS reclaims it, rather than in the repo where
+// `.gitignore` has to defend against a `git add -f`.
+const PROFILE = path.join(os.tmpdir(), "project-arena-cdp-clock");
 
 const failures = [];
 const notes = [];

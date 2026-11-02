@@ -12,7 +12,7 @@
  *      same mechanism twice with two different appearance strings and requiring the two
  *      runs to be identical.
  *
- * Run with: npm run test:mechanism
+ * Run with: npm run test:single -- tests/mechanism.test.mjs
  */
 import assert from "node:assert/strict";
 import test from "node:test";

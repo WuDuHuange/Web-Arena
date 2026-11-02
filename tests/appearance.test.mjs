@@ -16,7 +16,7 @@
  * forbids, so the tests below pin the three apart one at a time. The pixel half — that the
  * screen actually differs — is `scripts/verify-appearance.mjs`, because it needs a canvas.
  *
- * Run with: npm run test:appearance
+ * Run with: npm run test:single -- tests/appearance.test.mjs
  */
 
 import assert from "node:assert/strict";

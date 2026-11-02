@@ -9,12 +9,11 @@ coverage/
 .DS_Store
 .workbuddy-ai/
 
-# Local browser-profile scratch used by scripts/benchmark.mjs and the CDP verify scripts.
-# Both are throwaway: deleting them only costs a slower first launch next time.
+# Browser-profile scratch is written to `os.tmpdir()` by the scripts that launch Chrome,
+# so nothing a normal run creates matches these patterns any more. They stay as a
+# backstop: `BENCH_PROFILE_DIR` can still point back into the repo, and a profile left
+# here is 100-270 MB of cache plus a real browser's history and cookies.
 .bench-chrome/
 .bench-chrome-gpu/
-# The verify scripts each take their own profile directory (`.cdp-profile-one9334`,
-# `.cdp-profile-regress`, …), so a bare `.cdp-profile/` only ever caught one of them and
-# left the rest to show up as untracked. The wildcard is what actually keeps them out.
 .cdp-profile*/
 .cdp-fresh/
