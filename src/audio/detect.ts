@@ -4,11 +4,11 @@ import type { Cue } from "./synth.ts";
 /**
  * Derives sound cues by diffing successive snapshots.
  *
- * The alternative — emitting events from inside the simulation — was rejected. Events
- * would have to be buffered per tick, drained exactly once, and kept out of every
- * determinism assertion; a bug there shows up as duplicate or missing audio, which is
- * both harmless-looking and miserable to trace. Reading two snapshots and comparing them
- * cannot affect the simulation at all, because nothing here writes to it.
+ * The alternative — driving audio from simulation events — was rejected, and stays
+ * rejected now that `simulation/events.ts` exists. A cue only needs to know that
+ * *something* happened, which a snapshot diff answers for free and with no way to
+ * corrupt the run; events exist for attribution (who hit whom, and with what), which a
+ * diff cannot recover. Two channels, two consumers, no overlap.
  *
  * The cost is that a cue fires one frame after the fact, which at 60 Hz is imperceptible.
  */

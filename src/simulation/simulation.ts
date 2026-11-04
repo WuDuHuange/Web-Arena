@@ -3,6 +3,7 @@ import { Battle } from "./battle.ts";
 import type { TickOutcome } from "./battle.ts";
 import { FixedStepClock } from "./clock.ts";
 import { stepBuffs } from "./effects.ts";
+import type { BattleEventSink } from "./events.ts";
 import { blast, stepMechanisms, stepProjectiles } from "./mechanisms.ts";
 import type { MechanismDamage, ProjectileRequest, VelocityOverlay } from "./mechanisms.ts";
 import { createRng } from "./rng.ts";
@@ -14,6 +15,13 @@ import type { World } from "./world.ts";
 export interface SimulationOptions {
   /** Defaults to 8 steps, i.e. a bounded amount of catch-up per frame. */
   readonly maxCatchUpSteps?: number;
+  /**
+   * Receives damage and death events as they happen, for battle logs and replay.
+   *
+   * Optional, and the simulation never reads anything back from it — see `events.ts`.
+   * Leaving it out costs one branch per event and allocates nothing.
+   */
+  readonly onEvent?: BattleEventSink;
 }
 
 /**
@@ -79,9 +87,16 @@ export class Simulation {
   private mechanismDamageTotal = 0;
   private chainLinksLastTick = 0;
   private lastSnapshot: WorldSnapshot;
+  /**
+   * Optional observer. Typed with an explicit `| undefined` rather than `?` because
+   * `exactOptionalPropertyTypes` makes the two different, and this one is assigned from
+   * a possibly-absent option.
+   */
+  private readonly onEvent: BattleEventSink | undefined;
 
   constructor(setup: BattleSetup, options: SimulationOptions = {}) {
     this.setup = setup;
+    this.onEvent = options.onEvent;
     this.world = createWorldFromSetup(setup);
     this.clock = new FixedStepClock({
       fixedStepMs: setup.fixedStepMs,
@@ -147,7 +162,7 @@ export class Simulation {
     stepBuffs(this.world.all());
 
     // 2. Intent and combat resolution.
-    this.lastOutcome = this.battle.run(this.world);
+    this.lastOutcome = this.battle.run(this.world, this.clock.steps, this.onEvent);
 
     // 3. Field mechanisms. Overlays are held until movement is written, so a conveyor or a
     //    blast shove cannot be overwritten by the AI's own intent later in the same tick.
@@ -195,6 +210,28 @@ export class Simulation {
       if (event.killed) {
         this.lastOutcome = { damage: this.lastOutcome.damage, killed: this.lastOutcome.killed + 1 };
         this.pendingRemovals.push(event.targetId);
+      }
+      // Same channel as combat damage, with the prop trigger in `cause`. A barrel chain,
+      // a spike field and a turret shot are all mechanism damage; which one it was is
+      // exactly what a replay needs and exactly what the totals above throw away.
+      if (this.onEvent) {
+        this.onEvent({
+          kind: "damage",
+          tick: this.clock.steps,
+          sourceId: event.sourceId,
+          targetId: event.targetId,
+          cause: event.trigger,
+          amount: event.amount
+        });
+        if (event.killed) {
+          this.onEvent({
+            kind: "death",
+            tick: this.clock.steps,
+            targetId: event.targetId,
+            sourceId: event.sourceId,
+            cause: event.trigger
+          });
+        }
       }
     }
 

@@ -2,6 +2,7 @@ import { findNearestTarget, resolveFacing, resolveMovementIntent } from "./ai.ts
 import { cadenceTicks, selectAbility, stepCombat, stopDistanceFor } from "./combat.ts";
 import { modifiersOf } from "./effects.ts";
 import type { BuffCatalog } from "./effects.ts";
+import type { BattleEventSink } from "./events.ts";
 import type { AbilitySpec, BuffSpec, Entity, Faction } from "./types.ts";
 import type { World } from "./world.ts";
 
@@ -68,8 +69,14 @@ export class Battle {
     this.characterAggro.set(characterId, aggroRange);
   }
 
-  /** Resolves one tick. Returns nothing; callers read `world` and `takeRemovals`. */
-  run(world: World): TickOutcome {
+  /**
+   * Resolves one tick. Returns the totals; callers read `world` and `takeRemovals`.
+   *
+   * `sink` is optional and is the only reason this signature knows about `tick` at all.
+   * When it is absent the combat results are still walked for their totals, so an
+   * unobserved run takes exactly the path it took before events existed.
+   */
+  run(world: World, tick = 0, sink?: BattleEventSink): TickOutcome {
     const entities = world.all();
 
     // Phase 1: intent. Nothing is mutated except each entity's own combat intent fields.
@@ -121,6 +128,28 @@ export class Battle {
         if (event.killed) {
           killed += 1;
           this.pendingRemovals.push(event.targetId);
+        }
+
+        // Reported, never read back. The object literals only exist when someone is
+        // listening: `sink` is undefined on every run that does not ask for a timeline.
+        if (sink) {
+          sink({
+            kind: "damage",
+            tick,
+            sourceId: event.attackerId,
+            targetId: event.targetId,
+            cause: event.abilityId,
+            amount: event.amount
+          });
+          if (event.killed) {
+            sink({
+              kind: "death",
+              tick,
+              targetId: event.targetId,
+              sourceId: event.attackerId,
+              cause: event.abilityId
+            });
+          }
         }
       }
     }

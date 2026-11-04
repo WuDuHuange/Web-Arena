@@ -82,4 +82,5 @@ export type {
   Transform,
   WorldSnapshot
 } from "./types.ts";
+export type { BattleEvent, BattleEventSink, DamageDealt, EntityDied } from "./events.ts";
 export { World } from "./world.ts";
