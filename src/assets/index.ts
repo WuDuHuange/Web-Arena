@@ -98,13 +98,29 @@ export const BGM_URL = requireSlot(MUSIC, "./music/maou-loop-8bit27.mp3");
  * A table rather than one named export per pose, and the reason is structural: the registry
  * lives in `content/appearance.ts`, which imports nothing by contract — that is what lets the
  * whole decision table run under `node --test` with no browser and no asset pipeline. So a
- * spec can only ever *name* a slot (`asset:robot-idle`); the lookup that turns that name into
- * a hashed URL has to happen on this side, where the glob is. Keeping the paths in one table
- * also means a renamed file breaks the build at `requireSlot` rather than at 404 time.
+ * spec can only ever *name* a slot (`asset:red-blade-idle`); the lookup that turns that name
+ * into a hashed URL has to happen on this side, where the glob is. Keeping the paths in one
+ * table also means a renamed file breaks the build at `requireSlot` rather than at 404 time.
+ *
+ * The unit list is written out rather than derived from the glob for that same reason: a glob
+ * would happily hand back whatever files happen to exist, so deleting a sprite would shrink
+ * the table instead of failing. Listing the eight units means a missing file is a build error
+ * that names the slot.
  */
-export const CHARACTER_ART: Readonly<Record<string, string>> = {
-  "robot-idle": requireSlot(CHARACTERS, "./characters/robot-idle.png"),
-  "robot-attack": requireSlot(CHARACTERS, "./characters/robot-attack.png"),
-  "zombie-idle": requireSlot(CHARACTERS, "./characters/zombie-idle.png"),
-  "zombie-attack": requireSlot(CHARACTERS, "./characters/zombie-attack.png")
-};
+const UNITS = [
+  "red-blade",
+  "red-lancer",
+  "red-caster",
+  "red-bomber",
+  "blue-skirmisher",
+  "blue-hexer",
+  "blue-shrieker",
+  "blue-rune"
+] as const;
+
+export const CHARACTER_ART: Readonly<Record<string, string>> = Object.fromEntries(
+  UNITS.flatMap((unit) => [
+    [`${unit}-idle`, requireSlot(CHARACTERS, `./characters/${unit}-idle.png`)],
+    [`${unit}-attack`, requireSlot(CHARACTERS, `./characters/${unit}-attack.png`)]
+  ])
+);

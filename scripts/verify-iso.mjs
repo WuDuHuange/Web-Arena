@@ -478,7 +478,7 @@ async function colourNear(clientX, clientY, kind, radiusCss = 12) {
       // predicates as verify-appearance.mjs, and narrow for the same reason: the red side's
       // skin #3dbf9e is g - r = 130 while the health-bar green #63c07a is 93, and the blue
       // side's armour #5393c5 is b - g = 50 while the faction blue #4b8fe0 is 81.
-      zombieArt: (r, g, b) => g > 130 && g - r > 100 && b > 105 && b < 200 && r < 110,
+      zombieArt: (r, g, b) => g > 130 && g - r > 100 && b > 105 && b < 200 && r < 110 && g - b > 10,
       robotArt: (r, g, b) => b > 160 && b - g > 15 && b - g < 65 && b - r > 80 && g > 110 && g < 200 && r < 130
     }[${JSON.stringify(kind)}];
     let n = 0;
@@ -616,7 +616,7 @@ check(restoredKeys.length > 0 && artUnit !== undefined, "restoring the keys puts
 });
 
 if (artUnit) {
-  const kind = artUnit.unit.appearance === "toon-zombie" ? "zombieArt" : "robotArt";
+  const kind = artUnit.unit.appearance.startsWith("unit-red-") ? "zombieArt" : "robotArt";
   const hit = await colourNear(artUnit.client.x, artUnit.client.y, kind, 46);
   check(hit.n > 0, "a unit drawn from art is positioned by the projection, not squashed by it", {
     point: artUnit.client,

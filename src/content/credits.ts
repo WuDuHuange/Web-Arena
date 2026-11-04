@@ -45,9 +45,9 @@ export interface AssetCredit {
 /**
  * Every credit currently verified.
  *
- * Five entries across the two kinds. The materials are the arena floor, the battle loop and
- * the interface chrome; the appearances are the two character keys the unit library resolves
- * to. Four of the five are CC0 and therefore owe nothing, and they are listed anyway — the
+ * Eleven entries across the two kinds. The materials are the arena floor, the battle loop and
+ * the interface chrome; the appearances are the eight unit keys the character library resolves
+ * to. Ten of the eleven are CC0 and therefore owe nothing, and they are listed anyway — the
  * row records that the licence was read, on a date, from the source, and a registry that
  * could not tell a checked asset from an unchecked one would be useless for the question it
  * exists to answer.
@@ -56,6 +56,30 @@ export interface AssetCredit {
  * somewhere a visitor can reach: the corner line in the HUD and the 素材署名 block both
  * render from this list, so deleting the row breaks the obligation in two places at once.
  */
+/**
+ * One credit for one unit sprite.
+ *
+ * The eight units all come from the same pack, differ only in which pose was taken and which
+ * hue band was moved, and would otherwise be eight near-identical literals to keep in step by
+ * hand. They still get one row each: `findUnregisteredAppearances` reports the appearance
+ * keys that were never credited, and a single row covering all eight would leave it unable to
+ * say which of them was actually checked.
+ *
+ * The title records the derivation, because the files in `src/assets/characters/` are not the
+ * pack's own: `scripts/recolor-characters.py` takes a pose and moves the unit's identity band
+ * to a new hue, so a reader comparing them against kenney.nl will not find the colours they
+ * see here.
+ */
+const toonUnit = (slot: string, figure: string, poses: string): AssetCredit => ({
+  kind: "appearance",
+  slot,
+  title: `Toon Characters — ${figure}（${poses}；经 recolor-characters.py 调色）`,
+  author: "Kenney",
+  source: "https://kenney.nl/assets/toon-characters",
+  licence: "CC0 1.0 Universal — https://creativecommons.org/publicdomain/zero/1.0/",
+  obtained: "2026-10-14"
+});
+
 export const ASSET_CREDITS: readonly AssetCredit[] = [
   {
     kind: "material",
@@ -92,27 +116,14 @@ export const ASSET_CREDITS: readonly AssetCredit[] = [
     licence: "CC0 1.0 Universal — https://creativecommons.org/publicdomain/zero/1.0/",
     obtained: "2026-10-15"
   },
-  {
-    kind: "appearance",
-    slot: "toon-robot",
-    // One row per appearance key rather than one row per pack. The pack ships both
-    // characters, but a slot is what the code asks for, and a single row covering two keys
-    // would leave `findUnregisteredAppearances` unable to say which of them was checked.
-    title: "Toon Characters — Robot（idle / attack）",
-    author: "Kenney",
-    source: "https://kenney.nl/assets/toon-characters",
-    licence: "CC0 1.0 Universal — https://creativecommons.org/publicdomain/zero/1.0/",
-    obtained: "2026-10-14"
-  },
-  {
-    kind: "appearance",
-    slot: "toon-zombie",
-    title: "Toon Characters — Zombie（idle / attack）",
-    author: "Kenney",
-    source: "https://kenney.nl/assets/toon-characters",
-    licence: "CC0 1.0 Universal — https://creativecommons.org/publicdomain/zero/1.0/",
-    obtained: "2026-10-14"
-  }
+  toonUnit("unit-red-blade", "Zombie · 腐爪", "attack0 / attack1"),
+  toonUnit("unit-red-lancer", "Zombie · 骨矛", "interact / attack0"),
+  toonUnit("unit-red-caster", "Zombie · 疫囊", "show / attack1"),
+  toonUnit("unit-red-bomber", "Zombie · 胀尸", "wide / attack0"),
+  toonUnit("unit-blue-skirmisher", "Robot · 蜂刺", "attack0 / attack1"),
+  toonUnit("unit-blue-hexer", "Robot · 磁轨", "interact / attack0"),
+  toonUnit("unit-blue-shrieker", "Robot · 共鸣", "show / attack1"),
+  toonUnit("unit-blue-rune", "Robot · 浮炮", "wide / attack0")
 ];
 
 const REQUIRED_FIELDS: readonly (keyof AssetCredit)[] = [

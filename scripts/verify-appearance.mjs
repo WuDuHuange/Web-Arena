@@ -14,13 +14,13 @@
  *   - no art authored          → no character pixels, no magenta (the grey box is the render)
  *   - art authored, load fails → magenta, no character pixels
  *
- * Two colours identify the two shipped keys, and the pair is what makes the third state
- * provable rather than merely plausible:
+ * Two colours identify the two sides, and the pair is what makes the third state provable
+ * rather than merely plausible:
  *
- *   - **zombie green** `#3dbf9e` — the red side, the key this run overwrites.
+ *   - **zombie green** `#3dbf9e` — the red side, the keys this run removes.
  *   - **robot blue**   `#5393c5` — the blue side, the control.
  *
- * Overwriting one key must leave the other side drawing. Without that control, "the sprite
+ * Removing the red side must leave the blue side drawing. Without that control, "the sprite
  * disappeared" and "the renderer stopped drawing anything" are the same observation, and the
  * second one is a far worse bug than the first.
  *
@@ -59,9 +59,24 @@ const readFlag = (name, fallback) => {
 const port = Number(readFlag("port", "9334"));
 const shotPath = readFlag("shot", "");
 
-/** The key this run overwrites, and the one it must leave alone. */
-const SUBJECT = "toon-zombie";
-const CONTROL = "toon-robot";
+/**
+ * The keys this run removes, and the one it must leave alone.
+ *
+ * All four red keys, not one. The negative assertions below count zombie-green pixels across
+ * the whole canvas, and with one key per unit that proxy only holds if the whole faction is
+ * unregistered — removing a single unit's art leaves its three neighbours drawing, and
+ * "a key with no art must not draw a sprite" then fails against a renderer that is behaving
+ * perfectly. When the roster shared one key per side this list was a single entry; the shape
+ * of the test did not change, only how many keys carry the red side.
+ */
+const SUBJECT_KEYS = [
+  "unit-red-blade",
+  "unit-red-lancer",
+  "unit-red-caster",
+  "unit-red-bomber"
+];
+const SUBJECT = SUBJECT_KEYS[0];
+const CONTROL = "unit-blue-skirmisher";
 
 const pageUrl = (() => {
   const url = new URL(rawUrl);
@@ -301,7 +316,7 @@ async function scan() {
         // and matching it must never be shadowed by a looser predicate below.
         if (r > 200 && g < 110 && b > 160) {
           magenta += 1;
-        } else if (g > 130 && g - r > 100 && b > 105 && b < 200 && r < 110) {
+        } else if (g > 130 && g - r > 100 && b > 105 && b < 200 && r < 110 && g - b > 10) {
           // The zombie's skin, #3dbf9e. The g - r > 100 clause is the load-bearing one, and
           // it is there for exactly one reason: the **health bar**. A full-health unit draws
           // a bar in #63c07a — (99,192,122) — which is g - r = 93, and every way that green
@@ -316,6 +331,14 @@ async function scan() {
           // 100 rather than 94 for headroom: the sprite's own anti-aliased edges blend toward
           // the dark arena and their g - r falls away from 130 quickly, so the clause is not
           // near any zombie pixel it needs to keep.
+          //
+          // g - b > 10 separates green from cyan, and it arrived with the roster. Once each
+          // unit carried its own accent, 磁轨's cyan core (#2ec4d6) began producing a handful
+          // of edge pixels with g - r > 100 and b just under 200 — three of them, enough to
+          // fail "a key with no art must not draw a sprite" against a renderer that had
+          // removed every red sprite correctly. Zombie skin is #3dbf9e, where g - b is 33;
+          // cyan blended toward the floor has g - b below zero. The clause costs nothing on
+          // the colour it is meant to find.
           zombie += 1;
           if (x < minX) minX = x;
           if (y < minY) minY = y;
@@ -350,13 +373,20 @@ async function scan() {
 const override = (key, entry) =>
   evaluate(`window.__arenaAppearance.override(${JSON.stringify(key)}, ${JSON.stringify(entry)}), "ok"`);
 
+/** Applies one entry to every red key, so the whole faction is in the same state. */
+const overrideAll = async (entry) => {
+  for (const key of SUBJECT_KEYS) {
+    await override(key, entry);
+  }
+};
+
 // --- The run -----------------------------------------------------------------
 
-const report = { ok: true, url: pageUrl, subject: SUBJECT, control: CONTROL, steps: [], consoleErrors, exceptions };
+const report = { ok: true, url: pageUrl, subjects: SUBJECT_KEYS, control: CONTROL, steps: [], consoleErrors, exceptions };
 const step = (name, detail) => report.steps.push({ name, ...detail });
 
 const units = await evaluate(`window.__arenaAppearance.units()`);
-const carrying = units.filter((u) => u.appearance === SUBJECT);
+const carrying = units.filter((u) => SUBJECT_KEYS.includes(u.appearance));
 report.armedUnits = carrying;
 report.unitCount = units.length;
 report.keysInUse = [...new Set(units.map((u) => u.appearance))].sort();
@@ -365,6 +395,12 @@ report.keysInUse = [...new Set(units.map((u) => u.appearance))].sort();
 // earlier version of this script "restored" the broken entry it had just installed and then
 // reported that the art never came back — a test bug that looked exactly like a renderer bug.
 const pristine = await evaluate(`window.__arenaAppearance.registry()`);
+
+// Every panel count below is relative to this, never to a number written here. The panel has
+// one row per registered key, and that number is content: it was two when a side shared one
+// key and eight when each unit got its own. A literal would turn every future roster change
+// into a failing verification that says nothing about the renderer.
+const registrySize = Object.keys(pristine).length;
 
 // 1. Art authored and loaded, while the field is frozen in the editor.
 //
@@ -415,8 +451,8 @@ if (shotPath) {
 // 2. No art authored. Removing the entry is how a key that was never registered behaves, and
 //    it must look like neither of the other two states. The control side must keep drawing:
 //    without it, "the sprite is gone" and "the renderer is gone" are the same observation.
-await override(SUBJECT, null);
-const panelNone = await waitForPanel((panel) => panel.rows.length === 1);
+await overrideAll(null);
+const panelNone = await waitForPanel((panel) => panel.rows.length === registrySize - SUBJECT_KEYS.length);
 // The renderer is a 60 Hz loop, so a quarter second is fifteen frames — this delay is about
 // giving it a frame, not about waiting for anything to answer.
 await delay(250);
@@ -432,7 +468,7 @@ step("an unregistered key falls back to procedural, and only that key", {
 // 3. Art authored, load fails. A slot the asset table does not know, so the failure runs
 //    through the real resolver and the real catch rather than a simulated one — and no
 //    network request, so the run stays quiet.
-await override(SUBJECT, { base: { kind: "single", source: "asset:no-such-slot" } });
+await overrideAll({ base: { kind: "single", source: "asset:no-such-slot" } });
 const panelFail = await waitForPanel((panel) => panel.rows.some((row) => row.state === "加载失败"));
 await delay(250);
 const failed = await scan();
@@ -452,7 +488,7 @@ if (shotPath) {
 
 // 4. A file that is not there, which is what a real missing asset looks like. Same state, but
 //    the reason now has to carry a path a human can act on.
-await override(SUBJECT, { base: { kind: "single", source: "art/definitely-not-here.png" } });
+await overrideAll({ base: { kind: "single", source: "art/definitely-not-here.png" } });
 const panelMissing = await waitForPanel((panel) =>
   panel.rows.some((row) => row.reason.includes("definitely-not-here"))
 );
@@ -466,9 +502,11 @@ step("a missing file reports the path it could not load", {
 
 // 5. Put it back. A debug hook that cannot round-trip would leave the page broken after the
 //    test, and would make every later assertion measure the wrong thing.
-await override(SUBJECT, pristine[SUBJECT]);
+for (const key of SUBJECT_KEYS) {
+  await override(key, pristine[key]);
+}
 const panelRestored = await waitForPanel(
-  (panel) => panel.rows.length === 2 && panel.rows.every((row) => row.state === "已就绪")
+  (panel) => panel.rows.length === registrySize && panel.rows.every((row) => row.state === "已就绪")
 );
 await delay(250);
 const restored = await scan();
@@ -534,17 +572,17 @@ report.screenshots = { failed: failedShot, art: artShot, battle: battleShot };
 
 const expectations = [
   [units.length > 0, "the scene must place at least one unit"],
-  [carrying.length > 0, `a shipped unit must carry the appearance key ${SUBJECT}`],
+  [carrying.length > 0, `a shipped unit must carry one of the red keys (${SUBJECT_KEYS.join(", ")})`],
   [report.keysInUse.includes(CONTROL), `the scene must also place a unit drawing ${CONTROL}`],
   [art.zombie > 0, "the red side's art must actually be drawn on the canvas"],
   [art.robot > 0, "the blue side's art must actually be drawn on the canvas"],
   [art.magenta === 0, "loaded art must not draw the failure marker"],
-  [panelArt?.summary.includes("就绪 2") === true, "the panel must report both keys as ready"],
-  [panelArt?.rows.length === 2, "the panel must list both registered keys"],
+  [panelArt?.summary.includes(`就绪 ${registrySize}`) === true, "the panel must report every registered key as ready"],
+  [panelArt?.rows.length === registrySize, "the panel must list every registered key"],
   [none.zombie === 0, "a key with no art must not draw a sprite"],
   [none.magenta === 0, "a key with no art must not draw the failure marker either"],
   [none.robot > 0, "overwriting one key must leave the other side drawing"],
-  [panelNone?.rows.length === 1, "the panel must drop the removed key from its list"],
+  [panelNone?.rows.length === registrySize - SUBJECT_KEYS.length, "the panel must drop the removed keys from its list"],
   [failed.zombie === 0, "a failed load must not leave the sprite on screen"],
   [failed.robot > 0, "a failed load must not take the other side down with it"],
   [failed.magenta > 0, "a failed load must be visible on the canvas"],

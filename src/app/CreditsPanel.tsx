@@ -8,15 +8,15 @@ import { CONTENT_LIBRARY } from "../content/library.ts";
  * before it ships. That is easy to promise and easy to forget, so the mechanism goes in
  * before the first asset does.
  *
- * This build ships four external files across two kinds: the floor texture, the battle loop,
- * and the two character sheets the unit library resolves to. Three are CC0 and one is CC BY,
- * and the panel says so either way, because "no credits listed" and "nothing to credit" look
- * identical on screen and mean very different things.
+ * This build ships eighteen external files across two kinds: the floor texture, the battle
+ * loop, the interface chrome, and sixteen unit sprites — one idle and one strike pose for each
+ * of the eight characters. Seventeen are CC0 and one is CC BY, and the panel says so either
+ * way, because "no credits listed" and "nothing to credit" look identical on screen and mean
+ * very different things.
  *
  * The appearance keys are listed too — now as the keys that actually resolve to files rather
- * than as a to-do list of ones that might. Seeing `toon-robot` next to the four characters
- * that share it is the honest picture: the art phase has started, and it started with two
- * silhouettes rather than eight.
+ * than as a to-do list of ones that might. Each character owns one key, so the list is a
+ * roster rather than a grouping: four zombies in four stances, four machines in four.
  */
 
 interface AppearanceRef {
@@ -93,8 +93,8 @@ export function CreditsPanel() {
 
       <p className="panel__note">
         机关图形仍由 PixiJS 程序绘制，音效仍由 WebAudio 振荡器合成，这两部分没有第三方内容。
-        外部文件是角色立绘、地面材质与循环 BGM。八个角色共用两个外观键：
-        <code>toon-zombie</code> 给红方，<code>toon-robot</code> 给蓝方。
+        外部文件是角色立绘、地面材质与循环 BGM。八个角色各有一个外观键，全部取自同一套 Toon
+        Characters：红方用僵尸，蓝方用机器人，每个单位取不同的姿态并把装束或核心灯调到各自的颜色。
       </p>
 
       {/*

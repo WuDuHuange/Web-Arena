@@ -154,60 +154,66 @@ export interface AppearanceEntry {
 }
 
 /**
- * The registry.
+ * How tall a figure stands, in world units, measured boot to scalp.
  *
- * Two entries, one per side, and both are head-on poses rather than directional art. That is
- * a deliberate limit of this first art pass, not an oversight: the pack these came from ships
- * one view per character, and building a four-way facing table around art that cannot express
- * one would be a data model written for a file that does not exist.
+ * One number for all eight units, and the sprites are built to make that possible. The pack
+ * draws its six character types at noticeably different sizes — a robot's figure is 90 pixels
+ * where a zombie's is 101 — so `scripts/recolor-characters.py` trims each pose down to its own
+ * body height. Frame and figure are therefore the same rectangle, and one height gives eight
+ * figures of one size. A unit's collider is about 26 units across, so 38 draws a body roughly
+ * one and a half colliders tall: the ratio the first art pass was tuned against.
+ */
+const FIGURE_HEIGHT = 38;
+
+/**
+ * One slot of a unit's art.
  *
- * The anchor and the height are the two numbers that matter, and both were measured from the
- * files rather than chosen by eye:
+ * Every unit wants the same five fields and the only thing that varies is which file. A
+ * function rather than sixteen repeated literals, so the entries below read as a roster — and
+ * so that moving the anchor or the height is one edit rather than sixteen that can drift.
+ */
+const unitSprite = (slot: string): SingleFrameSpec => ({
+  kind: "single",
+  source: `asset:${slot}`,
+  anchor: { x: 0.5, y: 1 },
+  height: FIGURE_HEIGHT,
+  facing: "mirror"
+});
+
+/** A unit's two states: the stance it holds, and the pose it telegraphs with. */
+const unit = (id: string): AppearanceEntry => ({
+  base: unitSprite(`${id}-idle`),
+  attack: unitSprite(`${id}-attack`)
+});
+
+/**
+ * The registry: one entry per unit, not one per side.
  *
- *   - **The feet sit on the bottom edge of the frame.** Every pose in the pack has an opaque
- *     bounding box that ends at the last row, so `y: 1` puts the unit's projected position
- *     exactly under its boots and stops a 128-pixel figure from hovering.
- *   - **The height is in world units, not pixels.** A unit's collider is about 26 units
- *     across; art left at its native 128 pixels would stand five times the arena's idea of a
- *     person. 48 units draws a figure roughly one and a half colliders tall, which is what
- *     reads as a body standing on a tile rather than as a portrait pasted over one.
+ * Until this pass there were two entries — all four red units drew `toon-zombie` and all four
+ * blue units drew `toon-robot` — which meant four units a side were the same picture. The
+ * roster could only be read, not seen. Each unit now has its own pair of poses, derived from
+ * the same pack by `scripts/recolor-characters.py`, so the silhouettes differ while the side
+ * still reads at a glance: zombies keep their green skin and orange trousers, machines keep
+ * their steel, and only the band that carries identity moves.
  *
- * `attack` is mirrored and `base` is not. The strike pose is drawn facing right, so flipping
- * it when the unit points left is what makes a wind-up read as aimed at the target rather
- * than away from it. The idle pose is symmetric, where the flip would cost a branch and
- * change no pixel.
+ * The anchor is `y: 1` because every pose in the pack has an opaque bounding box that ends on
+ * the last row (checked for all eight: `bottom_gap == 0`), so the boots land on the unit's
+ * projected position instead of hovering above it. That is what makes swapping poses safe.
+ *
+ * Both slots are mirrored, which is a change from the first art pass. When the idle pose was a
+ * symmetric head-on stance the flip changed no pixel and only the strike pose carried it; these
+ * stances are directional — a lunge, a reaching arm, raised arms — so a unit facing left has to
+ * be flipped in both states or it appears to attack away from its target.
  */
 const registry: Record<string, AppearanceEntry> = {
-  "toon-robot": {
-    base: {
-      kind: "single",
-      source: "asset:robot-idle",
-      anchor: { x: 0.5, y: 1 },
-      height: 48
-    },
-    attack: {
-      kind: "single",
-      source: "asset:robot-attack",
-      anchor: { x: 0.5, y: 1 },
-      height: 48,
-      facing: "mirror"
-    }
-  },
-  "toon-zombie": {
-    base: {
-      kind: "single",
-      source: "asset:zombie-idle",
-      anchor: { x: 0.5, y: 1 },
-      height: 48
-    },
-    attack: {
-      kind: "single",
-      source: "asset:zombie-attack",
-      anchor: { x: 0.5, y: 1 },
-      height: 48,
-      facing: "mirror"
-    }
-  }
+  "unit-red-blade": unit("red-blade"),
+  "unit-red-lancer": unit("red-lancer"),
+  "unit-red-caster": unit("red-caster"),
+  "unit-red-bomber": unit("red-bomber"),
+  "unit-blue-skirmisher": unit("blue-skirmisher"),
+  "unit-blue-hexer": unit("blue-hexer"),
+  "unit-blue-shrieker": unit("blue-shrieker"),
+  "unit-blue-rune": unit("blue-rune")
 };
 
 export const APPEARANCE_REGISTRY: Readonly<Record<string, AppearanceEntry>> = registry;

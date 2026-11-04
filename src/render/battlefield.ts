@@ -473,9 +473,19 @@ export async function createBattlefield(
         sprite.view.alpha = dying ? 0.45 : 1;
 
         // Art replaces the body and nothing else. The marker and the bar are drawn on top.
+        //
+        // The bar is lifted by the *drawn* height of the sprite rather than by the collider,
+        // so it clears the head instead of crossing the face. `artHeight` is the frame height
+        // in world units, which is what the scale above was derived from.
         sprite.ground.clear();
         sprite.chrome.clear();
-        drawChrome(sprite.chrome, entity, projected.x, projected.y);
+        drawChrome(
+          sprite.chrome,
+          entity,
+          projected.x,
+          projected.y,
+          artHeight(plan.spec, texture.height)
+        );
         return;
       }
       // `ready` with no texture is a wiring bug, and the one thing it must not do is fall
@@ -660,7 +670,22 @@ function drawBody(gfx: Graphics, entity: Entity, x: number, y: number): void {
  * Assumes the caller has already cleared the graphics, because the caller may have put a
  * placeholder or a sprite there instead of a body.
  */
-function drawChrome(gfx: Graphics, entity: Entity, x: number, y: number): void {
+function drawChrome(
+  gfx: Graphics,
+  entity: Entity,
+  x: number,
+  y: number,
+  /**
+   * How far above the unit's ground point its drawn body reaches, in world units.
+   *
+   * Defaults to the collider radius, which is the whole body when the unit is a grey circle.
+   * Art is taller than its collider — a 38-unit figure standing on a 13-unit footprint — and
+   * pinning the bar to the radius put it across the unit's face. That was true of the grey
+   * box too, but a flat circle has no face to cover, so nobody noticed until the sprites
+   * arrived.
+   */
+  headroom: number = entity.collider.radius
+): void {
   if (!entity.combat) {
     return;
   }
@@ -681,14 +706,14 @@ function drawChrome(gfx: Graphics, entity: Entity, x: number, y: number): void {
     gfx.stroke({ width: casting ? 3 : 2, color: markerColor });
   }
 
-  drawHealthBar(gfx, entity, x, y, radius);
+  drawHealthBar(gfx, entity, x, y, headroom);
 }
 
-function drawHealthBar(gfx: Graphics, entity: Entity, x: number, y: number, radius: number): void {
+function drawHealthBar(gfx: Graphics, entity: Entity, x: number, y: number, headroom: number): void {
   const max = Math.max(entity.health.max, 1);
   const ratio = Math.max(Math.min(entity.health.current / max, 1), 0);
   const barX = x - HEALTH_BAR_WIDTH / 2;
-  const barY = y - radius - HEALTH_BAR_OFFSET;
+  const barY = y - headroom - HEALTH_BAR_OFFSET;
 
   gfx.rect(barX, barY, HEALTH_BAR_WIDTH, HEALTH_BAR_HEIGHT);
   gfx.fill(0x11141c);
